@@ -80,6 +80,14 @@ const TERRAIN_COLORS = [
   { h: 0, c: 0x5D4E37 },
 ];
 
+// 4x4 Bayer matrix for ordered dithering
+const BAYER_MATRIX = [
+  [0, 8, 2, 10],
+  [12, 4, 14, 6],
+  [3, 11, 1, 9],
+  [15, 7, 13, 5]
+];
+
 // Game state
 let worldDisplacementY = 0;
 let obstacles = [];
@@ -159,6 +167,46 @@ function getTerrainColor(h) {
   return TERRAIN_COLORS[TERRAIN_COLORS.length - 1].c;
 }
 
+function getBayerThreshold(x, y) {
+  return BAYER_MATRIX[y % 4][x % 4] / 16;
+}
+
+function applyDithering(color, x, y, intensity = 32) {
+  const threshold = getBayerThreshold(x, y);
+
+  const r = (color >> 16) & 0xFF;
+  const g = (color >> 8) & 0xFF;
+  const b = color & 0xFF;
+
+  // Quantize colors with dithering
+  const quantize = (channel) => {
+    const normalized = channel / 255;
+    const stepped = Math.floor(normalized * intensity) / intensity;
+    const error = normalized - stepped;
+
+    // Apply threshold of Bayer
+    if (error > threshold) {
+      return Math.min(255, Math.floor((stepped + 1/intensity) * 255));
+    }
+    return Math.floor(stepped * 255);
+  };
+
+  return (quantize(r) << 16) | (quantize(g) << 8) | quantize(b);
+}
+
+function reducePalette(color, levels = 8) {
+  const r = (color >> 16) & 0xFF;
+  const g = (color >> 8) & 0xFF;
+  const b = color & 0xFF;
+
+  const step = 255 / (levels - 1);
+  const nr = Math.round(r / step) * step;
+  const ng = Math.round(g / step) * step;
+  const nb = Math.round(b / step) * step;
+
+  return (nr << 16) | (ng << 8) | nb;
+}
+
 function renderHeightmap(gfx, camera) {
   gfx.clear();
   const w = CONFIG.width, h = CONFIG.height;
@@ -208,7 +256,11 @@ function renderHeightmap(gfx, camera) {
           const g = Math.floor(((baseColor >> 8) & 0xFF) * (1 - fog) + skyG * fog);
           const b = Math.floor((baseColor & 0xFF) * (1 - fog) + skyB * fog);
 
-          gfx.fillStyle((r << 16) | (g << 8) | b);
+          let finalColor = (r << 16) | (g << 8) | b;
+          // Apply dithering for retro effect
+          finalColor = applyDithering(finalColor, screenX, screenY, 16); // Adjust 16 for more/less dithering
+
+          gfx.fillStyle(finalColor);
           gfx.fillRect(screenX, screenY, step, yBuffer - screenY);
 
           // Update y-buffer
