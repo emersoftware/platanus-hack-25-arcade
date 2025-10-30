@@ -1,5 +1,5 @@
-// CÓNDOR - Pseudo-3D Rail Shooter
-// A Space Harrier-inspired rail shooter set in the Andes
+// CÓNDOR - Heightmap + Sprite Hybrid Rail Shooter
+// Combines heightmap terrain (Comanche-style) with pseudo-3D sprites
 
 const config = {
   type: Phaser.AUTO,
@@ -18,28 +18,34 @@ const config = {
 
 const game = new Phaser.Game(config);
 
-// Game configuration (adjustable via debug sliders)
+// Game configuration
 let CONFIG = {
+  width: 800,
+  height: 600,
   condor: {
-    speed: 4,
-    smoothing: 0.15,
+    speed: 10,
+    smoothing: 0.35,
     prevX: 400,
     prevY: 300,
     centerY: 300
   },
   camera: {
+    worldX: 256,
+    worldZ: 256,
+    height: 100,
     displacementFactor: 0.8,
     maxDisplacement: 200,
     smoothing: 0.1
   },
+  heightmap: {
+    size: 512,
+    maxHeight: 120,
+    renderDist: 300,
+    horizon: 350,
+    step: 2
+  },
   obstacles: {
     velocity: 5
-  },
-  ground: {
-    scrollMultiplier: 1.0,
-    baseY: 250,
-    lineCount: 15,
-    spacing: 80
   },
   render: {
     spawnDistance: 1000,
@@ -65,11 +71,20 @@ const HEIGHT_LANES = [
   { name: 'very_high', y: -180, color: 0x4D96FF }
 ];
 
+// Terrain colors by height
+const TERRAIN_COLORS = [
+  { h: 120, c: 0xFFFFFF },
+  { h: 90, c: 0xC0C0C0 },
+  { h: 60, c: 0xA0826D },
+  { h: 30, c: 0x8B7355 },
+  { h: 0, c: 0x5D4E37 },
+];
+
 // Game state
 let worldDisplacementY = 0;
 let obstacles = [];
-let groundLines = [];
-let groundOffsetZ = 0;
+let heightmapData = null;
+let terrainGraphics = null;
 let condor;
 let cursors;
 let debugKey;
@@ -77,16 +92,144 @@ let debugVisible = false;
 let debugUI = {};
 let sliders = [];
 
-// Pseudo-3D projection with camera offset
+// Heightmap generation (simplified Perlin-like noise)
+function noise2D(x, z) {
+  const hash = (n) => {
+    n = Math.sin(n) * 43758.5453;
+    return n - Math.floor(n);
+  };
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fz * fz * (3 - 2 * fz);
+  const a = hash(ix + hash(iz));
+  const b = hash(ix + 1 + hash(iz));
+  const c = hash(ix + hash(iz + 1));
+  const d = hash(ix + 1 + hash(iz + 1));
+  return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+}
+
+function generateHeightmap(size) {
+  const map = [];
+  for (let x = 0; x < size; x++) {
+    map[x] = [];
+    for (let z = 0; z < size; z++) {
+      let h = 0;
+      h += noise2D(x / 64, z / 64) * 50;
+      h += noise2D(x / 32, z / 32) * 25;
+      h += noise2D(x / 16, z / 16) * 12;
+      h = Math.max(0, h + 15);
+      map[x][z] = Math.min(CONFIG.heightmap.maxHeight, h);
+    }
+  }
+  return map;
+}
+
+function getTerrainHeight(x, z) {
+  const size = CONFIG.heightmap.size;
+  x = ((x % size) + size) % size;
+  z = ((z % size) + size) % size;
+  const ix = Math.floor(x) % size;
+  const iz = Math.floor(z) % size;
+  const fx = x - Math.floor(x);
+  const fz = z - Math.floor(z);
+  const h00 = heightmapData[ix][iz];
+  const h10 = heightmapData[(ix + 1) % size][iz];
+  const h01 = heightmapData[ix][(iz + 1) % size];
+  const h11 = heightmapData[(ix + 1) % size][(iz + 1) % size];
+  return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
+}
+
+function lerpColor(c1, c2, t) {
+  const r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+  const r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return (r << 16) | (g << 8) | b;
+}
+
+function getTerrainColor(h) {
+  for (let i = 0; i < TERRAIN_COLORS.length - 1; i++) {
+    if (h <= TERRAIN_COLORS[i + 1].h) {
+      const t = (h - TERRAIN_COLORS[i].h) / (TERRAIN_COLORS[i + 1].h - TERRAIN_COLORS[i].h);
+      return lerpColor(TERRAIN_COLORS[i].c, TERRAIN_COLORS[i + 1].c, t);
+    }
+  }
+  return TERRAIN_COLORS[TERRAIN_COLORS.length - 1].c;
+}
+
+function renderHeightmap(gfx, camera) {
+  gfx.clear();
+  const w = CONFIG.width, h = CONFIG.height;
+  const horizon = CONFIG.heightmap.horizon;
+  const step = 2;
+
+  // Sky/fog color
+  const skyR = 135, skyG = 206, skyB = 235;
+
+  // Classic voxel space rendering - simple and direct
+  for (let screenX = 0; screenX < w; screenX += step) {
+    // Y-buffer: track the highest point we've drawn to
+    let yBuffer = h; // Start from bottom of screen
+
+    // Calculate ray direction for this column
+    const rayAngle = (screenX - w / 2) / w;
+
+    // Cast ray from near to far
+    for (let dist = 10; dist < CONFIG.heightmap.renderDist; dist += 2) {
+      // Sample terrain at this distance
+      const sampleX = camera.worldX + rayAngle * dist * 0.5;
+      const sampleZ = camera.worldZ + dist;
+
+      // Get height at this point
+      const terrainHeight = getTerrainHeight(sampleX, sampleZ);
+
+      // Simple projection: when camera is ABOVE terrain
+      // The terrain should appear BELOW the horizon
+      const heightAboveTerrain = camera.height - terrainHeight;
+
+      // Project to screen (inverse of what was "working" when inverted)
+      // If it worked at top when formula was: horizon - (height * scale)
+      // Then for bottom it should be: horizon + (height * scale)
+      const projectedY = horizon + (heightAboveTerrain * 300) / dist;
+
+      // Draw if this creates a visible column
+      if (projectedY >= horizon && projectedY < yBuffer) {
+        const screenY = Math.floor(projectedY);
+
+        // Only draw if we have something to draw
+        if (yBuffer > screenY) {
+          // Get color with distance fog
+          const baseColor = getTerrainColor(terrainHeight);
+          const fog = Math.pow(dist / CONFIG.heightmap.renderDist, 1.5);
+
+          const r = Math.floor(((baseColor >> 16) & 0xFF) * (1 - fog) + skyR * fog);
+          const g = Math.floor(((baseColor >> 8) & 0xFF) * (1 - fog) + skyG * fog);
+          const b = Math.floor((baseColor & 0xFF) * (1 - fog) + skyB * fog);
+
+          gfx.fillStyle((r << 16) | (g << 8) | b);
+          gfx.fillRect(screenX, screenY, step, yBuffer - screenY);
+
+          // Update y-buffer
+          yBuffer = screenY;
+        }
+      }
+
+      // Stop if we've filled to horizon
+      if (yBuffer <= horizon) break;
+    }
+  }
+}
+
+// Pseudo-3D projection
 function project3D(worldX, worldY, z, cameraOffsetY = 0) {
   const scale = FOV / (FOV + z);
   const screenX = 400 + ((worldX - 400) * scale);
   const screenYBase = 300 + (worldY / (z / FOV));
-  const screenY = screenYBase + cameraOffsetY;
-  return { x: screenX, y: screenY, scale: scale };
+  return { x: screenX, y: screenYBase + cameraOffsetY, scale: scale };
 }
 
-// Get color based on height
 function getColorByHeight(worldY) {
   if (worldY > 50) return 0xFF6B6B;
   if (worldY > -50) return 0xFFD93D;
@@ -94,7 +237,6 @@ function getColorByHeight(worldY) {
   return 0x4D96FF;
 }
 
-// Random height from lanes
 function getRandomHeight() {
   const lane = Phaser.Utils.Array.GetRandom(HEIGHT_LANES);
   return lane.y + Phaser.Math.Between(-30, 30);
@@ -103,11 +245,23 @@ function getRandomHeight() {
 function create() {
   const scene = this;
 
-  // Create condor sprite
+  console.log('Generating heightmap...');
+  heightmapData = generateHeightmap(CONFIG.heightmap.size);
+  console.log('Heightmap ready!');
+
+  // Debug: verificar algunos valores del heightmap
+  console.log('Sample heights:', {
+    center: getTerrainHeight(256, 256),
+    near: getTerrainHeight(256, 300),
+    far: getTerrainHeight(256, 500)
+  });
+
+  terrainGraphics = this.add.graphics();
+  terrainGraphics.setDepth(-1000);
+
   condor = this.add.rectangle(400, 300, 60, 40, 0x0000ff);
   condor.setDepth(500);
 
-  // Create obstacles with heights
   const obstacleCount = 12;
   for (let i = 0; i < obstacleCount; i++) {
     const worldX = (Math.random() * 800 - 400) + 400;
@@ -115,6 +269,7 @@ function create() {
     const z = 200 + Math.random() * 800;
     const color = getColorByHeight(worldY);
     const sprite = this.add.rectangle(0, 0, 40, 40, color);
+    sprite.setVisible(false); // TEMPORALMENTE OCULTOS
 
     obstacles.push({
       sprite: sprite,
@@ -125,31 +280,11 @@ function create() {
     });
   }
 
-  // Create ground lines
-  for (let i = 0; i < CONFIG.ground.lineCount; i++) {
-    const worldZ = i * CONFIG.ground.spacing;
-    const thickness = 2 + (i % 3);
-    const colorShade = i % 2 === 0 ? 0x8B7355 : 0x9B8365;
-
-    const line = this.add.line(400, 0, 0, 0, 800, 0, colorShade, 1);
-    line.setLineWidth(thickness);
-    line.setDepth(-1000);
-
-    groundLines.push({
-      sprite: line,
-      worldZ: worldZ,
-      baseThickness: thickness
-    });
-  }
-
-  // Input
   cursors = this.input.keyboard.createCursorKeys();
   debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
 
-  // Debug UI setup
   createDebugUI(this);
 
-  // Title
   this.add.text(400, 30, 'CÓNDOR', {
     fontSize: '48px',
     fontFamily: 'Arial',
@@ -158,7 +293,6 @@ function create() {
     strokeThickness: 4
   }).setOrigin(0.5).setDepth(600);
 
-  // Controls hint
   this.add.text(400, 570, 'Arrows: Move | D: Debug', {
     fontSize: '14px',
     fontFamily: 'Arial',
@@ -170,14 +304,11 @@ function create() {
 
 function createDebugUI(scene) {
   debugUI.container = scene.add.container(0, 0).setDepth(700);
-
-  // Background panel
   debugUI.bg = scene.add.rectangle(0, 0, 280, 350, 0x000000, 0.85);
   debugUI.bg.setOrigin(0, 0);
   debugUI.container.add(debugUI.bg);
 
-  // Title
-  debugUI.title = scene.add.text(10, 10, 'DEBUG PANEL (D to toggle)', {
+  debugUI.title = scene.add.text(10, 10, 'DEBUG (D)', {
     fontSize: '14px',
     fontFamily: 'Arial',
     color: '#00ff00',
@@ -185,7 +316,6 @@ function createDebugUI(scene) {
   });
   debugUI.container.add(debugUI.title);
 
-  // Status text
   debugUI.status = scene.add.text(10, 35, '', {
     fontSize: '11px',
     fontFamily: 'Arial',
@@ -193,19 +323,18 @@ function createDebugUI(scene) {
   });
   debugUI.container.add(debugUI.status);
 
-  // Sliders
-  const y = 120;
+  const y = 130;
   const sliderDefs = [
     { label: 'Condor Speed', prop: ['condor', 'speed'], min: 1, max: 10, step: 0.5 },
     { label: 'Smoothing', prop: ['condor', 'smoothing'], min: 0.05, max: 0.5, step: 0.05 },
     { label: 'Obstacle Vel', prop: ['obstacles', 'velocity'], min: 1, max: 15, step: 0.5 },
     { label: 'Cam Factor', prop: ['camera', 'displacementFactor'], min: 0.3, max: 1.5, step: 0.1 },
-    { label: 'Ground Scroll', prop: ['ground', 'scrollMultiplier'], min: 0.5, max: 2, step: 0.1 },
+    { label: 'Cam Height', prop: ['camera', 'height'], min: 50, max: 200, step: 5 },
     { label: 'Max Cam Disp', prop: ['camera', 'maxDisplacement'], min: 100, max: 400, step: 10 }
   ];
 
   sliderDefs.forEach((def, i) => {
-    const slider = createSlider(scene, 10, y + i * 35, 260, def);
+    const slider = createSlider(scene, 10, y + i * 33, 260, def);
     debugUI.container.add(slider.graphics);
     debugUI.container.add(slider.label);
     debugUI.container.add(slider.value);
@@ -220,13 +349,13 @@ function createSlider(scene, x, y, width, def) {
   const graphics = scene.add.graphics();
 
   const label = scene.add.text(x, y - 15, def.label, {
-    fontSize: '11px',
+    fontSize: '10px',
     fontFamily: 'Arial',
     color: '#ffff00'
   });
 
-  const valueText = scene.add.text(x + width - 40, y - 15, value.toFixed(2), {
-    fontSize: '11px',
+  const valueText = scene.add.text(x + width - 40, y - 15, value.toFixed(1), {
+    fontSize: '10px',
     fontFamily: 'Arial',
     color: '#00ff00'
   });
@@ -270,7 +399,7 @@ function updateSliders(scene) {
       slider.dragging = false;
     }
 
-    slider.value.setText(currentVal.toFixed(2));
+    slider.value.setText(currentVal.toFixed(1));
   });
 }
 
@@ -307,33 +436,7 @@ function updateCondor() {
   const velY = condor.y - CONFIG.condor.prevY;
 
   condor.angle = Phaser.Math.Clamp(velX * 2, -15, 15);
-  const scaleY = 1 + (velY * 0.01);
-  condor.scaleY = Phaser.Math.Clamp(scaleY, 0.9, 1.1);
-}
-
-function updateGround(velocity) {
-  groundOffsetZ += velocity * CONFIG.ground.scrollMultiplier;
-
-  groundLines.forEach(line => {
-    const z = line.worldZ - groundOffsetZ;
-
-    if (z < -CONFIG.ground.spacing) {
-      line.worldZ += CONFIG.ground.lineCount * CONFIG.ground.spacing;
-    }
-
-    const zActual = line.worldZ - groundOffsetZ;
-    if (zActual > 0 && zActual < 1000) {
-      const scale = FOV / (FOV + zActual);
-      const screenY = 300 + (CONFIG.ground.baseY * scale);
-      line.sprite.y = screenY + worldDisplacementY;
-      line.sprite.setAlpha(1 - (zActual / 1000));
-      line.sprite.setLineWidth(line.baseThickness * scale);
-      line.sprite.setDepth(-zActual - 1000);
-      line.sprite.setVisible(true);
-    } else {
-      line.sprite.setVisible(false);
-    }
-  });
+  condor.scaleY = Phaser.Math.Clamp(1 + velY * 0.01, 0.9, 1.1);
 }
 
 function recycleObstacle(obs) {
@@ -352,9 +455,19 @@ function update(time, delta) {
   }
 
   updateCondor();
-  updateRelativeCamera();
-  updateGround(CONFIG.obstacles.velocity);
+  // DISABLED: updateRelativeCamera(); // Temporalmente deshabilitado para probar terreno
 
+  // Update camera worldZ (forward movement)
+  CONFIG.camera.worldZ += CONFIG.obstacles.velocity;
+
+  // Keep camera X centered for testing
+  CONFIG.camera.worldX = 256; // Center of 512 heightmap
+
+  // Render heightmap terrain
+  renderHeightmap(terrainGraphics, CONFIG.camera);
+
+  // TEMPORALMENTE DESHABILITADO PARA PROBAR TERRENO
+  /*
   let closestZ = 1000;
   obstacles.forEach(obs => {
     obs.z -= CONFIG.obstacles.velocity;
@@ -372,25 +485,27 @@ function update(time, delta) {
 
     let alpha = 1;
     if (obs.z > CONFIG.render.fadeInStart) {
-      const range = CONFIG.render.spawnDistance - CONFIG.render.fadeInStart;
-      alpha = (CONFIG.render.spawnDistance - obs.z) / range;
+      alpha = (CONFIG.render.spawnDistance - obs.z) / (CONFIG.render.spawnDistance - CONFIG.render.fadeInStart);
     }
     if (obs.z < CONFIG.render.fadeOutStart) {
       alpha = obs.z / CONFIG.render.fadeOutStart;
     }
     obs.sprite.setAlpha(Phaser.Math.Clamp(alpha, 0, 1));
   });
+  */
+  let closestZ = 0; // Para debug
 
   if (debugVisible) {
     updateSliders(scene);
     const fps = Math.round(1000 / delta);
+    const terrainH = getTerrainHeight(CONFIG.camera.worldX, CONFIG.camera.worldZ);
     debugUI.status.setText([
       `FPS: ${fps}`,
-      `Condor Y: ${Math.round(condor.y)}`,
+      `Cam: (${Math.round(CONFIG.camera.worldX)}, ${Math.round(CONFIG.camera.worldZ)})`,
+      `Height: ${Math.round(CONFIG.camera.height)}`,
+      `Terrain: ${Math.round(terrainH)}`,
       `World Disp Y: ${Math.round(worldDisplacementY)}`,
-      `Velocity: ${CONFIG.obstacles.velocity.toFixed(1)}`,
-      `Closest Z: ${Math.round(closestZ)}`,
-      `Obstacles: ${obstacles.length}`
+      `Closest Z: ${Math.round(closestZ)}`
     ].join('\n'));
   }
 }
