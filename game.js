@@ -1,11 +1,15 @@
-// Platanus Hack 25: Snake Game
-// Navigate the snake around the "PLATANUS HACK ARCADE" title made of blocks!
+// CÓNDOR - Pseudo-3D Rail Shooter
+// A Space Harrier-inspired rail shooter set in the Andes
 
 const config = {
   type: Phaser.AUTO,
   width: 800,
   height: 600,
-  backgroundColor: '#000000',
+  backgroundColor: '#87CEEB',
+  physics: {
+    default: 'arcade',
+    arcade: { debug: false }
+  },
   scene: {
     create: create,
     update: update
@@ -14,345 +18,379 @@ const config = {
 
 const game = new Phaser.Game(config);
 
-// Game variables
-let snake = [];
-let snakeSize = 15;
-let direction = { x: 1, y: 0 };
-let nextDirection = { x: 1, y: 0 };
-let food;
-let score = 0;
-let scoreText;
-let titleBlocks = [];
-let gameOver = false;
-let moveTimer = 0;
-let moveDelay = 150;
-let graphics;
-
-// Pixel font patterns (5x5 grid for each letter)
-const letters = {
-  P: [[1,1,1,1],[1,0,0,1],[1,1,1,1],[1,0,0,0],[1,0,0,0]],
-  L: [[1,0,0,0],[1,0,0,0],[1,0,0,0],[1,0,0,0],[1,1,1,1]],
-  A: [[0,1,1,0],[1,0,0,1],[1,1,1,1],[1,0,0,1],[1,0,0,1]],
-  T: [[1,1,1,1],[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]],
-  N: [[1,0,0,1],[1,1,0,1],[1,0,1,1],[1,0,0,1],[1,0,0,1]],
-  U: [[1,0,0,1],[1,0,0,1],[1,0,0,1],[1,0,0,1],[1,1,1,1]],
-  S: [[0,1,1,1],[1,0,0,0],[0,1,1,0],[0,0,0,1],[1,1,1,0]],
-  H: [[1,0,0,1],[1,0,0,1],[1,1,1,1],[1,0,0,1],[1,0,0,1]],
-  C: [[0,1,1,1],[1,0,0,0],[1,0,0,0],[1,0,0,0],[0,1,1,1]],
-  K: [[1,0,0,1],[1,0,1,0],[1,1,0,0],[1,0,1,0],[1,0,0,1]],
-  '2': [[1,1,1,0],[0,0,0,1],[0,1,1,0],[1,0,0,0],[1,1,1,1]],
-  '5': [[1,1,1,1],[1,0,0,0],[1,1,1,0],[0,0,0,1],[1,1,1,0]],
-  ':': [[0,0,0,0],[0,1,0,0],[0,0,0,0],[0,1,0,0],[0,0,0,0]],
-  R: [[1,1,1,0],[1,0,0,1],[1,1,1,0],[1,0,1,0],[1,0,0,1]],
-  D: [[1,1,1,0],[1,0,0,1],[1,0,0,1],[1,0,0,1],[1,1,1,0]],
-  E: [[1,1,1,1],[1,0,0,0],[1,1,1,0],[1,0,0,0],[1,1,1,1]]
+// Game configuration (adjustable via debug sliders)
+let CONFIG = {
+  condor: {
+    speed: 4,
+    smoothing: 0.15,
+    prevX: 400,
+    prevY: 300,
+    centerY: 300
+  },
+  camera: {
+    displacementFactor: 0.8,
+    maxDisplacement: 200,
+    smoothing: 0.1
+  },
+  obstacles: {
+    velocity: 5
+  },
+  ground: {
+    scrollMultiplier: 1.0,
+    baseY: 250,
+    lineCount: 15,
+    spacing: 80
+  },
+  render: {
+    spawnDistance: 1000,
+    despawnDistance: -200,
+    fadeInStart: 950,
+    fadeOutStart: 100
+  },
+  limits: {
+    minX: 150,
+    maxX: 650,
+    minY: 100,
+    maxY: 500
+  }
 };
 
-// Bold font for ARCADE (filled/solid style)
-const boldLetters = {
-  A: [[1,1,1,1,1],[1,1,0,1,1],[1,1,1,1,1],[1,1,0,1,1],[1,1,0,1,1]],
-  R: [[1,1,1,1,0],[1,1,0,1,1],[1,1,1,1,0],[1,1,0,1,1],[1,1,0,1,1]],
-  C: [[1,1,1,1,1],[1,1,0,0,0],[1,1,0,0,0],[1,1,0,0,0],[1,1,1,1,1]],
-  D: [[1,1,1,1,0],[1,1,0,1,1],[1,1,0,1,1],[1,1,0,1,1],[1,1,1,1,0]],
-  E: [[1,1,1,1,1],[1,1,0,0,0],[1,1,1,1,0],[1,1,0,0,0],[1,1,1,1,1]]
-};
+const FOV = 300;
+
+// Height lanes for obstacles
+const HEIGHT_LANES = [
+  { name: 'low', y: 100, color: 0xFF6B6B },
+  { name: 'mid', y: 0, color: 0xFFD93D },
+  { name: 'high', y: -100, color: 0x6BCF7F },
+  { name: 'very_high', y: -180, color: 0x4D96FF }
+];
+
+// Game state
+let worldDisplacementY = 0;
+let obstacles = [];
+let groundLines = [];
+let groundOffsetZ = 0;
+let condor;
+let cursors;
+let debugKey;
+let debugVisible = false;
+let debugUI = {};
+let sliders = [];
+
+// Pseudo-3D projection with camera offset
+function project3D(worldX, worldY, z, cameraOffsetY = 0) {
+  const scale = FOV / (FOV + z);
+  const screenX = 400 + ((worldX - 400) * scale);
+  const screenYBase = 300 + (worldY / (z / FOV));
+  const screenY = screenYBase + cameraOffsetY;
+  return { x: screenX, y: screenY, scale: scale };
+}
+
+// Get color based on height
+function getColorByHeight(worldY) {
+  if (worldY > 50) return 0xFF6B6B;
+  if (worldY > -50) return 0xFFD93D;
+  if (worldY > -120) return 0x6BCF7F;
+  return 0x4D96FF;
+}
+
+// Random height from lanes
+function getRandomHeight() {
+  const lane = Phaser.Utils.Array.GetRandom(HEIGHT_LANES);
+  return lane.y + Phaser.Math.Between(-30, 30);
+}
 
 function create() {
   const scene = this;
-  graphics = this.add.graphics();
 
-  // Build "PLATANUS HACK ARCADE" in cyan - centered and grid-aligned
-  // PLATANUS: 8 letters × (4 cols + 1 spacing) = 40 blocks, but last letter no spacing = 39 blocks × 15px = 585px
-  let x = Math.floor((800 - 585) / 2 / snakeSize) * snakeSize;
-  let y = Math.floor(180 / snakeSize) * snakeSize;
-  'PLATANUS'.split('').forEach(char => {
-    x = drawLetter(char, x, y, 0x00ffff);
+  // Create condor sprite
+  condor = this.add.rectangle(400, 300, 60, 40, 0x0000ff);
+  condor.setDepth(500);
+
+  // Create obstacles with heights
+  const obstacleCount = 12;
+  for (let i = 0; i < obstacleCount; i++) {
+    const worldX = (Math.random() * 800 - 400) + 400;
+    const worldY = getRandomHeight();
+    const z = 200 + Math.random() * 800;
+    const color = getColorByHeight(worldY);
+    const sprite = this.add.rectangle(0, 0, 40, 40, color);
+
+    obstacles.push({
+      sprite: sprite,
+      worldX: worldX,
+      worldY: worldY,
+      z: z,
+      baseSize: 40
+    });
+  }
+
+  // Create ground lines
+  for (let i = 0; i < CONFIG.ground.lineCount; i++) {
+    const worldZ = i * CONFIG.ground.spacing;
+    const thickness = 2 + (i % 3);
+    const colorShade = i % 2 === 0 ? 0x8B7355 : 0x9B8365;
+
+    const line = this.add.line(400, 0, 0, 0, 800, 0, colorShade, 1);
+    line.setLineWidth(thickness);
+    line.setDepth(-1000);
+
+    groundLines.push({
+      sprite: line,
+      worldZ: worldZ,
+      baseThickness: thickness
+    });
+  }
+
+  // Input
+  cursors = this.input.keyboard.createCursorKeys();
+  debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+
+  // Debug UI setup
+  createDebugUI(this);
+
+  // Title
+  this.add.text(400, 30, 'CÓNDOR', {
+    fontSize: '48px',
+    fontFamily: 'Arial',
+    color: '#ffffff',
+    stroke: '#000000',
+    strokeThickness: 4
+  }).setOrigin(0.5).setDepth(600);
+
+  // Controls hint
+  this.add.text(400, 570, 'Arrows: Move | D: Debug', {
+    fontSize: '14px',
+    fontFamily: 'Arial',
+    color: '#000000',
+    backgroundColor: '#ffffff',
+    padding: { x: 5, y: 2 }
+  }).setOrigin(0.5).setDepth(600);
+}
+
+function createDebugUI(scene) {
+  debugUI.container = scene.add.container(0, 0).setDepth(700);
+
+  // Background panel
+  debugUI.bg = scene.add.rectangle(0, 0, 280, 350, 0x000000, 0.85);
+  debugUI.bg.setOrigin(0, 0);
+  debugUI.container.add(debugUI.bg);
+
+  // Title
+  debugUI.title = scene.add.text(10, 10, 'DEBUG PANEL (D to toggle)', {
+    fontSize: '14px',
+    fontFamily: 'Arial',
+    color: '#00ff00',
+    fontStyle: 'bold'
+  });
+  debugUI.container.add(debugUI.title);
+
+  // Status text
+  debugUI.status = scene.add.text(10, 35, '', {
+    fontSize: '11px',
+    fontFamily: 'Arial',
+    color: '#ffffff'
+  });
+  debugUI.container.add(debugUI.status);
+
+  // Sliders
+  const y = 120;
+  const sliderDefs = [
+    { label: 'Condor Speed', prop: ['condor', 'speed'], min: 1, max: 10, step: 0.5 },
+    { label: 'Smoothing', prop: ['condor', 'smoothing'], min: 0.05, max: 0.5, step: 0.05 },
+    { label: 'Obstacle Vel', prop: ['obstacles', 'velocity'], min: 1, max: 15, step: 0.5 },
+    { label: 'Cam Factor', prop: ['camera', 'displacementFactor'], min: 0.3, max: 1.5, step: 0.1 },
+    { label: 'Ground Scroll', prop: ['ground', 'scrollMultiplier'], min: 0.5, max: 2, step: 0.1 },
+    { label: 'Max Cam Disp', prop: ['camera', 'maxDisplacement'], min: 100, max: 400, step: 10 }
+  ];
+
+  sliderDefs.forEach((def, i) => {
+    const slider = createSlider(scene, 10, y + i * 35, 260, def);
+    debugUI.container.add(slider.graphics);
+    debugUI.container.add(slider.label);
+    debugUI.container.add(slider.value);
+    sliders.push(slider);
   });
 
-  // HACK: 4 letters × (4 cols + 1 spacing) = 20 blocks, but last letter no spacing = 19 blocks × 15px = 285px
-  x = Math.floor((800 - 285) / 2 / snakeSize) * snakeSize;
-  y = Math.floor(280 / snakeSize) * snakeSize;
-  'HACK'.split('').forEach(char => {
-    x = drawLetter(char, x, y, 0x00ffff);
+  debugUI.container.setVisible(false);
+}
+
+function createSlider(scene, x, y, width, def) {
+  const value = CONFIG[def.prop[0]][def.prop[1]];
+  const graphics = scene.add.graphics();
+
+  const label = scene.add.text(x, y - 15, def.label, {
+    fontSize: '11px',
+    fontFamily: 'Arial',
+    color: '#ffff00'
   });
 
-  // ARCADE: 6 letters × (5 cols + 1 spacing) = 36 blocks, but last letter no spacing = 35 blocks × 15px = 525px
-  x = Math.floor((800 - 525) / 2 / snakeSize) * snakeSize;
-  y = Math.floor(380 / snakeSize) * snakeSize;
-  'ARCADE'.split('').forEach(char => {
-    x = drawLetter(char, x, y, 0xff00ff, true);
-  });
-
-  // Score display
-  scoreText = this.add.text(16, 16, 'Score: 0', {
-    fontSize: '24px',
-    fontFamily: 'Arial, sans-serif',
+  const valueText = scene.add.text(x + width - 40, y - 15, value.toFixed(2), {
+    fontSize: '11px',
+    fontFamily: 'Arial',
     color: '#00ff00'
   });
 
-  // Instructions
-  this.add.text(400, 560, 'Arrow Keys | Avoid Walls, Yourself & The Title!', {
-    fontSize: '16px',
-    fontFamily: 'Arial, sans-serif',
-    color: '#888888',
-    align: 'center'
-  }).setOrigin(0.5);
-
-  // Initialize snake (start top left)
-  snake = [
-    { x: 75, y: 60 },
-    { x: 60, y: 60 },
-    { x: 45, y: 60 }
-  ];
-
-  // Spawn initial food
-  spawnFood();
-
-  // Keyboard input
-  this.input.keyboard.on('keydown', (event) => {
-    if (gameOver && event.key === 'r') {
-      restartGame(scene);
-      return;
-    }
-
-    if (event.key === 'ArrowUp' && direction.y === 0) {
-      nextDirection = { x: 0, y: -1 };
-    } else if (event.key === 'ArrowDown' && direction.y === 0) {
-      nextDirection = { x: 0, y: 1 };
-    } else if (event.key === 'ArrowLeft' && direction.x === 0) {
-      nextDirection = { x: -1, y: 0 };
-    } else if (event.key === 'ArrowRight' && direction.x === 0) {
-      nextDirection = { x: 1, y: 0 };
-    }
-  });
-
-  playTone(this, 440, 0.1);
-}
-
-function drawLetter(char, startX, startY, color, useBold = false) {
-  const pattern = useBold ? boldLetters[char] : letters[char];
-  if (!pattern) return startX + 30;
-
-  for (let row = 0; row < pattern.length; row++) {
-    for (let col = 0; col < pattern[row].length; col++) {
-      if (pattern[row][col]) {
-        const blockX = startX + col * snakeSize;
-        const blockY = startY + row * snakeSize;
-        titleBlocks.push({ x: blockX, y: blockY, color: color });
-      }
-    }
-  }
-  return startX + (pattern[0].length + 1) * snakeSize;
-}
-
-function update(_time, delta) {
-  if (gameOver) return;
-
-  moveTimer += delta;
-  if (moveTimer >= moveDelay) {
-    moveTimer = 0;
-    direction = nextDirection;
-    moveSnake(this);
-  }
-
-  drawGame();
-}
-
-function moveSnake(scene) {
-  const head = snake[0];
-  const newHead = {
-    x: head.x + direction.x * snakeSize,
-    y: head.y + direction.y * snakeSize
+  return {
+    graphics: graphics,
+    label: label,
+    value: valueText,
+    x: x,
+    y: y,
+    width: width,
+    def: def,
+    dragging: false
   };
-
-  // Check wall collision
-  if (newHead.x < 0 || newHead.x >= 800 || newHead.y < 0 || newHead.y >= 600) {
-    endGame(scene);
-    return;
-  }
-
-  // Check self collision
-  for (let segment of snake) {
-    if (segment.x === newHead.x && segment.y === newHead.y) {
-      endGame(scene);
-      return;
-    }
-  }
-
-  // Check title block collision
-  for (let block of titleBlocks) {
-    if (newHead.x === block.x && newHead.y === block.y) {
-      endGame(scene);
-      return;
-    }
-  }
-
-  snake.unshift(newHead);
-
-  // Check food collision
-  if (newHead.x === food.x && newHead.y === food.y) {
-    score += 10;
-    scoreText.setText('Score: ' + score);
-    spawnFood();
-    playTone(scene, 880, 0.1);
-
-    if (moveDelay > 80) {
-      moveDelay -= 2;
-    }
-  } else {
-    snake.pop();
-  }
 }
 
-function spawnFood() {
-  let valid = false;
-  let attempts = 0;
+function updateSliders(scene) {
+  sliders.forEach(slider => {
+    const def = slider.def;
+    const currentVal = CONFIG[def.prop[0]][def.prop[1]];
+    const percent = (currentVal - def.min) / (def.max - def.min);
 
-  while (!valid && attempts < 100) {
-    attempts++;
-    const gridX = Math.floor(Math.random() * 53) * snakeSize;
-    const gridY = Math.floor(Math.random() * 40) * snakeSize;
+    slider.graphics.clear();
+    slider.graphics.fillStyle(0x333333);
+    slider.graphics.fillRect(slider.x, slider.y, slider.width, 10);
+    slider.graphics.fillStyle(0x00ff00);
+    slider.graphics.fillRect(slider.x, slider.y, slider.width * percent, 10);
+    slider.graphics.lineStyle(1, 0xffffff);
+    slider.graphics.strokeRect(slider.x, slider.y, slider.width, 10);
 
-    // Check not on snake
-    let onSnake = false;
-    for (let segment of snake) {
-      if (segment.x === gridX && segment.y === gridY) {
-        onSnake = true;
-        break;
+    const pointer = scene.input.activePointer;
+    if (pointer.isDown) {
+      const sliderBounds = new Phaser.Geom.Rectangle(slider.x, slider.y, slider.width, 10);
+      if (Phaser.Geom.Rectangle.Contains(sliderBounds, pointer.x, pointer.y) || slider.dragging) {
+        slider.dragging = true;
+        const newPercent = Phaser.Math.Clamp((pointer.x - slider.x) / slider.width, 0, 1);
+        const newVal = def.min + newPercent * (def.max - def.min);
+        CONFIG[def.prop[0]][def.prop[1]] = Math.round(newVal / def.step) * def.step;
       }
-    }
-
-    // Check not on title blocks
-    let onTitle = false;
-    for (let block of titleBlocks) {
-      if (gridX === block.x && gridY === block.y) {
-        onTitle = true;
-        break;
-      }
-    }
-
-    if (!onSnake && !onTitle) {
-      food = { x: gridX, y: gridY };
-      valid = true;
-    }
-  }
-}
-
-function drawGame() {
-  graphics.clear();
-
-  // Draw title blocks
-  titleBlocks.forEach(block => {
-    graphics.fillStyle(block.color, 1);
-    graphics.fillRect(block.x, block.y, snakeSize - 2, snakeSize - 2);
-  });
-
-  // Draw snake
-  snake.forEach((segment, index) => {
-    if (index === 0) {
-      graphics.fillStyle(0x00ff00, 1);
     } else {
-      graphics.fillStyle(0x00aa00, 1);
+      slider.dragging = false;
     }
-    graphics.fillRect(segment.x, segment.y, snakeSize - 2, snakeSize - 2);
-  });
 
-  // Draw food
-  graphics.fillStyle(0xff0000, 1);
-  graphics.fillRect(food.x, food.y, snakeSize - 2, snakeSize - 2);
-}
-
-function endGame(scene) {
-  gameOver = true;
-  playTone(scene, 220, 0.5);
-
-  // Semi-transparent overlay
-  const overlay = scene.add.graphics();
-  overlay.fillStyle(0x000000, 0.7);
-  overlay.fillRect(0, 0, 800, 600);
-
-  // Game Over title with glow effect
-  const gameOverText = scene.add.text(400, 300, 'GAME OVER', {
-    fontSize: '64px',
-    fontFamily: 'Arial, sans-serif',
-    color: '#ff0000',
-    align: 'center',
-    stroke: '#ff6666',
-    strokeThickness: 8
-  }).setOrigin(0.5);
-
-  // Pulsing animation for game over text
-  scene.tweens.add({
-    targets: gameOverText,
-    scale: { from: 1, to: 1.1 },
-    alpha: { from: 1, to: 0.8 },
-    duration: 800,
-    yoyo: true,
-    repeat: -1,
-    ease: 'Sine.easeInOut'
-  });
-
-  // Score display
-  scene.add.text(400, 400, 'SCORE: ' + score, {
-    fontSize: '36px',
-    fontFamily: 'Arial, sans-serif',
-    color: '#00ffff',
-    align: 'center',
-    stroke: '#000000',
-    strokeThickness: 4
-  }).setOrigin(0.5);
-
-  // Restart instruction with subtle animation
-  const restartText = scene.add.text(400, 480, 'Press R to Restart', {
-    fontSize: '24px',
-    fontFamily: 'Arial, sans-serif',
-    color: '#ffff00',
-    align: 'center',
-    stroke: '#000000',
-    strokeThickness: 3
-  }).setOrigin(0.5);
-
-  // Blinking animation for restart text
-  scene.tweens.add({
-    targets: restartText,
-    alpha: { from: 1, to: 0.3 },
-    duration: 600,
-    yoyo: true,
-    repeat: -1,
-    ease: 'Sine.easeInOut'
+    slider.value.setText(currentVal.toFixed(2));
   });
 }
 
-function restartGame(scene) {
-  snake = [
-    { x: 75, y: 60 },
-    { x: 60, y: 60 },
-    { x: 45, y: 60 }
-  ];
-  direction = { x: 1, y: 0 };
-  nextDirection = { x: 1, y: 0 };
-  score = 0;
-  gameOver = false;
-  moveDelay = 150;
-  scoreText.setText('Score: 0');
-  spawnFood();
-  scene.scene.restart();
+function updateRelativeCamera() {
+  const deviation = condor.y - CONFIG.condor.centerY;
+  const targetDisplacement = -deviation * CONFIG.camera.displacementFactor;
+  worldDisplacementY += (targetDisplacement - worldDisplacementY) * CONFIG.camera.smoothing;
+  worldDisplacementY = Phaser.Math.Clamp(
+    worldDisplacementY,
+    -CONFIG.camera.maxDisplacement,
+    CONFIG.camera.maxDisplacement
+  );
 }
 
-function playTone(scene, frequency, duration) {
-  const audioContext = scene.sound.context;
-  const oscillator = audioContext.createOscillator();
-  const gainNode = audioContext.createGain();
+function updateCondor() {
+  let targetX = condor.x;
+  let targetY = condor.y;
 
-  oscillator.connect(gainNode);
-  gainNode.connect(audioContext.destination);
+  if (cursors.left.isDown) targetX -= CONFIG.condor.speed;
+  if (cursors.right.isDown) targetX += CONFIG.condor.speed;
+  if (cursors.up.isDown) targetY -= CONFIG.condor.speed;
+  if (cursors.down.isDown) targetY += CONFIG.condor.speed;
 
-  oscillator.frequency.value = frequency;
-  oscillator.type = 'square';
+  targetX = Phaser.Math.Clamp(targetX, CONFIG.limits.minX, CONFIG.limits.maxX);
+  targetY = Phaser.Math.Clamp(targetY, CONFIG.limits.minY, CONFIG.limits.maxY);
 
-  gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+  CONFIG.condor.prevX = condor.x;
+  CONFIG.condor.prevY = condor.y;
 
-  oscillator.start(audioContext.currentTime);
-  oscillator.stop(audioContext.currentTime + duration);
+  condor.x += (targetX - condor.x) * CONFIG.condor.smoothing;
+  condor.y += (targetY - condor.y) * CONFIG.condor.smoothing;
+
+  const velX = condor.x - CONFIG.condor.prevX;
+  const velY = condor.y - CONFIG.condor.prevY;
+
+  condor.angle = Phaser.Math.Clamp(velX * 2, -15, 15);
+  const scaleY = 1 + (velY * 0.01);
+  condor.scaleY = Phaser.Math.Clamp(scaleY, 0.9, 1.1);
+}
+
+function updateGround(velocity) {
+  groundOffsetZ += velocity * CONFIG.ground.scrollMultiplier;
+
+  groundLines.forEach(line => {
+    const z = line.worldZ - groundOffsetZ;
+
+    if (z < -CONFIG.ground.spacing) {
+      line.worldZ += CONFIG.ground.lineCount * CONFIG.ground.spacing;
+    }
+
+    const zActual = line.worldZ - groundOffsetZ;
+    if (zActual > 0 && zActual < 1000) {
+      const scale = FOV / (FOV + zActual);
+      const screenY = 300 + (CONFIG.ground.baseY * scale);
+      line.sprite.y = screenY + worldDisplacementY;
+      line.sprite.setAlpha(1 - (zActual / 1000));
+      line.sprite.setLineWidth(line.baseThickness * scale);
+      line.sprite.setDepth(-zActual - 1000);
+      line.sprite.setVisible(true);
+    } else {
+      line.sprite.setVisible(false);
+    }
+  });
+}
+
+function recycleObstacle(obs) {
+  obs.z = CONFIG.render.spawnDistance;
+  obs.worldX = (Math.random() * 800 - 400) + 400;
+  obs.worldY = getRandomHeight();
+  obs.sprite.fillColor = getColorByHeight(obs.worldY);
+}
+
+function update(time, delta) {
+  const scene = this;
+
+  if (Phaser.Input.Keyboard.JustDown(debugKey)) {
+    debugVisible = !debugVisible;
+    debugUI.container.setVisible(debugVisible);
+  }
+
+  updateCondor();
+  updateRelativeCamera();
+  updateGround(CONFIG.obstacles.velocity);
+
+  let closestZ = 1000;
+  obstacles.forEach(obs => {
+    obs.z -= CONFIG.obstacles.velocity;
+
+    if (obs.z < CONFIG.render.despawnDistance) {
+      recycleObstacle(obs);
+    }
+
+    if (obs.z < closestZ) closestZ = obs.z;
+
+    const projected = project3D(obs.worldX, obs.worldY, obs.z, worldDisplacementY);
+    obs.sprite.setPosition(projected.x, projected.y);
+    obs.sprite.setScale(projected.scale);
+    obs.sprite.setDepth(1000 - obs.z);
+
+    let alpha = 1;
+    if (obs.z > CONFIG.render.fadeInStart) {
+      const range = CONFIG.render.spawnDistance - CONFIG.render.fadeInStart;
+      alpha = (CONFIG.render.spawnDistance - obs.z) / range;
+    }
+    if (obs.z < CONFIG.render.fadeOutStart) {
+      alpha = obs.z / CONFIG.render.fadeOutStart;
+    }
+    obs.sprite.setAlpha(Phaser.Math.Clamp(alpha, 0, 1));
+  });
+
+  if (debugVisible) {
+    updateSliders(scene);
+    const fps = Math.round(1000 / delta);
+    debugUI.status.setText([
+      `FPS: ${fps}`,
+      `Condor Y: ${Math.round(condor.y)}`,
+      `World Disp Y: ${Math.round(worldDisplacementY)}`,
+      `Velocity: ${CONFIG.obstacles.velocity.toFixed(1)}`,
+      `Closest Z: ${Math.round(closestZ)}`,
+      `Obstacles: ${obstacles.length}`
+    ].join('\n'));
+  }
 }
