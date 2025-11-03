@@ -35,7 +35,13 @@ let CONFIG = {
     height: 100,
     displacementFactor: 0.8,
     maxDisplacement: 200,
-    smoothing: 0.1
+    smoothing: 0.1,
+    zoom: 1.5,
+    followLerp: 0.1,
+    rotationSensitivity: 0.02,
+    maxRotation: 0.1,
+    perspectiveShift: 0.4,
+    perspectiveLerp: 0.1
   },
   heightmap: {
     size: 512,
@@ -143,6 +149,7 @@ const BAYER_MATRIX = [
 
 // Game state
 let worldDisplacementY = 0;
+let currentPerspectiveShift = 0;
 let obstacles = [];
 let heightmapData = null;
 let terrainGraphics = null;
@@ -154,6 +161,7 @@ let debugUI = {};
 let sliders = [];
 let waveText;
 let condorCellIndicator;
+let debugRailsGraphics = null;
 
 // Heightmap generation (simplified Perlin-like noise)
 function noise2D(x, z) {
@@ -327,15 +335,6 @@ function renderHeightmap(gfx, camera) {
       if (yBuffer <= horizon) break;
     }
   }
-}
-
-// Simplified pseudo-3D projection
-function project3D(worldX, worldY, z, cameraOffsetY = 0) {
-  const scale = FOV / (FOV + z);
-  const screenX = 400 + ((worldX - 400) * scale);
-  const screenYBase = 300 + (worldY / (z / FOV));
-
-  return { x: screenX, y: screenYBase + cameraOffsetY, scale: scale };
 }
 
 // Generate perspective rails - MATRIX STYLE (no gaps)
@@ -550,15 +549,15 @@ function spawnWave(scene, waveNumber) {
   return newObstacles;
 }
 
-// Debug: Visualizar los rieles en perspectiva
-function drawRailsDebug(scene) {
-  const gfx = scene.add.graphics();
-  gfx.setDepth(DEPTH_LAYERS.DEBUG_RAILS);
+function updateDebugRailsGraphics() {
+  if (!debugRailsGraphics) return;
+
+  debugRailsGraphics.clear();
 
   RAILS.forEach(rail => {
     // Draw far quad (spawn) - RED
-    gfx.lineStyle(1, 0xFF0000, 0.5);
-    gfx.strokeRect(
+    debugRailsGraphics.lineStyle(1, 0xFF0000, 0.5);
+    debugRailsGraphics.strokeRect(
       rail.far.topLeft.x,
       rail.far.topLeft.y,
       rail.far.topRight.x - rail.far.topLeft.x,
@@ -566,8 +565,8 @@ function drawRailsDebug(scene) {
     );
 
     // Draw near quad (arrival) - GREEN
-    gfx.lineStyle(1, 0x00FF00, 0.5);
-    gfx.strokeRect(
+    debugRailsGraphics.lineStyle(1, 0x00FF00, 0.5);
+    debugRailsGraphics.strokeRect(
       rail.near.topLeft.x,
       rail.near.topLeft.y,
       rail.near.topRight.x - rail.near.topLeft.x,
@@ -575,12 +574,21 @@ function drawRailsDebug(scene) {
     );
 
     // Connect corners to show rails - YELLOW
-    gfx.lineStyle(1, 0xFFFF00, 0.3);
-    gfx.lineBetween(rail.far.topLeft.x, rail.far.topLeft.y, rail.near.topLeft.x, rail.near.topLeft.y);
-    gfx.lineBetween(rail.far.topRight.x, rail.far.topRight.y, rail.near.topRight.x, rail.near.topRight.y);
-    gfx.lineBetween(rail.far.bottomLeft.x, rail.far.bottomLeft.y, rail.near.bottomLeft.x, rail.near.bottomLeft.y);
-    gfx.lineBetween(rail.far.bottomRight.x, rail.far.bottomRight.y, rail.near.bottomRight.x, rail.near.bottomRight.y);
+    debugRailsGraphics.lineStyle(1, 0xFFFF00, 0.3);
+    debugRailsGraphics.lineBetween(rail.far.topLeft.x, rail.far.topLeft.y, rail.near.topLeft.x, rail.near.topLeft.y);
+    debugRailsGraphics.lineBetween(rail.far.topRight.x, rail.far.topRight.y, rail.near.topRight.x, rail.near.topRight.y);
+    debugRailsGraphics.lineBetween(rail.far.bottomLeft.x, rail.far.bottomLeft.y, rail.near.bottomLeft.x, rail.near.bottomLeft.y);
+    debugRailsGraphics.lineBetween(rail.far.bottomRight.x, rail.far.bottomRight.y, rail.near.bottomRight.x, rail.near.bottomRight.y);
   });
+}
+
+// Debug: Visualizar los rieles en perspectiva
+function drawRailsDebug(scene) {
+  const gfx = scene.add.graphics();
+  gfx.setDepth(DEPTH_LAYERS.DEBUG_RAILS);
+  debugRailsGraphics = gfx;
+
+  updateDebugRailsGraphics();
 }
 
 function create() {
@@ -606,6 +614,11 @@ function create() {
   // Visual indicator for condor's cell
   condorCellIndicator = this.add.graphics();
   condorCellIndicator.setDepth(DEPTH_LAYERS.CELL_INDICATOR);
+
+  // Configure main camera with zoom and follow
+  const mainCamera = this.cameras.main;
+  mainCamera.setZoom(CONFIG.camera.zoom);
+  mainCamera.startFollow(condor, true, CONFIG.camera.followLerp, CONFIG.camera.followLerp);
 
   // Initialize new wave system
   waveSystem.activeObstacles = [];
@@ -651,7 +664,7 @@ function create() {
 
 function createDebugUI(scene) {
   debugUI.container = scene.add.container(0, 0).setDepth(DEPTH_LAYERS.DEBUG_UI);
-  debugUI.bg = scene.add.rectangle(0, 0, 280, 480, 0x000000, 0.85);
+  debugUI.bg = scene.add.rectangle(0, 0, 280, 640, 0x000000, 0.85);
   debugUI.bg.setOrigin(0, 0);
   debugUI.container.add(debugUI.bg);
 
@@ -677,6 +690,11 @@ function createDebugUI(scene) {
     { label: 'Obstacle Vel', prop: ['obstacles', 'velocity'], min: 1, max: 15, step: 0.5 },
     { label: 'Min Speed Mult', prop: ['obstacles', 'minSpeedMultiplier'], min: 0.1, max: 1.0, step: 0.1 },
     { label: 'Max Speed Mult', prop: ['obstacles', 'maxSpeedMultiplier'], min: 1.0, max: 5.0, step: 0.5 },
+    { label: 'Cam Zoom', prop: ['camera', 'zoom'], min: 1.0, max: 3.0, step: 0.1 },
+    { label: 'Cam Rotation', prop: ['camera', 'rotationSensitivity'], min: 0.0, max: 0.1, step: 0.01 },
+    { label: 'Max Rotation', prop: ['camera', 'maxRotation'], min: 0.0, max: 0.3, step: 0.05 },
+    { label: 'Perspective Shift', prop: ['camera', 'perspectiveShift'], min: 0.0, max: 1.0, step: 0.1 },
+    { label: 'Perspective Lerp', prop: ['camera', 'perspectiveLerp'], min: 0.0, max: 0.5, step: 0.05 },
     { label: 'Cam Factor', prop: ['camera', 'displacementFactor'], min: 0.3, max: 1.5, step: 0.1 },
     { label: 'Cam Height', prop: ['camera', 'height'], min: 50, max: 200, step: 5 },
     { label: 'Max Cam Disp', prop: ['camera', 'maxDisplacement'], min: 100, max: 400, step: 10 }
@@ -743,6 +761,11 @@ function updateSliders(scene) {
         const newPercent = Phaser.Math.Clamp((pointer.x - slider.x) / slider.width, 0, 1);
         const newVal = def.min + newPercent * (def.max - def.min);
         CONFIG[def.prop[0]][def.prop[1]] = Math.round(newVal / def.step) * def.step;
+
+        // Apply zoom in real-time
+        if (def.prop[0] === 'camera' && def.prop[1] === 'zoom') {
+          scene.cameras.main.setZoom(CONFIG.camera.zoom);
+        }
       }
     } else {
       slider.dragging = false;
@@ -761,6 +784,37 @@ function updateRelativeCamera() {
     -CONFIG.camera.maxDisplacement,
     CONFIG.camera.maxDisplacement
   );
+}
+
+function updateRailsFarPositions() {
+  const { farGrid } = PERSPECTIVE_SYSTEM;
+  const cols = farGrid.columns;
+  const rows = farGrid.rows;
+  const farCellWidth = farGrid.width / cols;
+  const farCellHeight = farGrid.height / rows;
+
+  RAILS.forEach(rail => {
+    const farCenterX = farGrid.centerX - (farGrid.width / 2) + (rail.col + 0.5) * farCellWidth;
+    const farCenterY = farGrid.centerY - (farGrid.height / 2) + (rail.row + 0.5) * farCellHeight;
+
+    rail.far.topLeft.y = farCenterY - farCellHeight / 2;
+    rail.far.topRight.y = farCenterY - farCellHeight / 2;
+    rail.far.bottomLeft.y = farCenterY + farCellHeight / 2;
+    rail.far.bottomRight.y = farCenterY + farCellHeight / 2;
+  });
+}
+
+function updateDynamicPerspective() {
+  const deviation = condor.y - CONFIG.condor.centerY;
+  const targetShift = -deviation * CONFIG.camera.perspectiveShift;
+
+  currentPerspectiveShift += (targetShift - currentPerspectiveShift) * CONFIG.camera.perspectiveLerp;
+
+  const baseCenterY = 160;
+  PERSPECTIVE_SYSTEM.farGrid.centerY = baseCenterY + currentPerspectiveShift;
+
+  updateRailsFarPositions();
+  updateDebugRailsGraphics();
 }
 
 function updateCondor() {
@@ -797,6 +851,16 @@ function update(time, delta) {
   }
 
   updateCondor();
+  updateDynamicPerspective();
+
+  // Apply camera rotation based on condor movement
+  const velX = condor.x - CONFIG.condor.prevX;
+  const targetRotation = velX * CONFIG.camera.rotationSensitivity;
+  const clampedRotation = Phaser.Math.Clamp(targetRotation, -CONFIG.camera.maxRotation, CONFIG.camera.maxRotation);
+  const currentRotation = scene.cameras.main.rotation;
+  const newRotation = currentRotation + (clampedRotation - currentRotation) * 0.1;
+  scene.cameras.main.setRotation(newRotation);
+
   updateRelativeCamera();
 
   // Update condor cell indicator
