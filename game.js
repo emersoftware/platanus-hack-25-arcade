@@ -97,7 +97,7 @@ const PERSPECTIVE_SYSTEM = {
   // Grid lejano (donde spawenean, cerca del punto de fuga)
   farGrid: {
     centerX: 400,
-    centerY: 160,
+    centerY: 300,
     width: 200,   // Ancho total del grid
     height: 160,  // Alto total del grid (5 filas)
     columns: 5,
@@ -150,6 +150,7 @@ const BAYER_MATRIX = [
 // Game state
 let worldDisplacementY = 0;
 let currentPerspectiveShift = 0;
+let baseFarGridCenterY = 160; // Store initial farGrid centerY
 let obstacles = [];
 let heightmapData = null;
 let terrainGraphics = null;
@@ -549,6 +550,7 @@ function spawnWave(scene, waveNumber) {
   return newObstacles;
 }
 
+// Update debug rails visualization dynamically
 function updateDebugRailsGraphics() {
   if (!debugRailsGraphics) return;
 
@@ -584,15 +586,16 @@ function updateDebugRailsGraphics() {
 
 // Debug: Visualizar los rieles en perspectiva
 function drawRailsDebug(scene) {
-  const gfx = scene.add.graphics();
-  gfx.setDepth(DEPTH_LAYERS.DEBUG_RAILS);
-  debugRailsGraphics = gfx;
-
+  debugRailsGraphics = scene.add.graphics();
+  debugRailsGraphics.setDepth(DEPTH_LAYERS.DEBUG_RAILS);
   updateDebugRailsGraphics();
 }
 
 function create() {
   const scene = this;
+
+  // Store initial farGrid centerY as the base for dynamic perspective
+  baseFarGridCenterY = PERSPECTIVE_SYSTEM.farGrid.centerY;
 
   console.log('Generating heightmap...');
   heightmapData = generateHeightmap(CONFIG.heightmap.size);
@@ -810,8 +813,7 @@ function updateDynamicPerspective() {
 
   currentPerspectiveShift += (targetShift - currentPerspectiveShift) * CONFIG.camera.perspectiveLerp;
 
-  const baseCenterY = 160;
-  PERSPECTIVE_SYSTEM.farGrid.centerY = baseCenterY + currentPerspectiveShift;
+  PERSPECTIVE_SYSTEM.farGrid.centerY = baseFarGridCenterY + currentPerspectiveShift;
 
   updateRailsFarPositions();
   updateDebugRailsGraphics();
