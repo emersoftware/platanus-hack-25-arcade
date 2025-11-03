@@ -45,13 +45,22 @@ let CONFIG = {
     step: 2
   },
   obstacles: {
-    velocity: 5
+    velocity: 5,
+    minSpeedMultiplier: 0.5,
+    maxSpeedMultiplier: 3.0
   },
   render: {
     spawnDistance: 1000,
     despawnDistance: -200,
     fadeInStart: 950,
     fadeOutStart: 100
+  },
+  // ÁREA DE JUEGO (jugador y llegada de rieles)
+  playArea: {
+    x: 150,
+    y: 100,
+    width: 500,  // 650 - 150
+    height: 400  // 500 - 100
   },
   limits: {
     minX: 150,
@@ -63,13 +72,57 @@ let CONFIG = {
 
 const FOV = 300;
 
-// Height lanes for obstacles
-const HEIGHT_LANES = [
-  { name: 'low', y: 100, color: 0xFF6B6B },
-  { name: 'mid', y: 0, color: 0xFFD93D },
-  { name: 'high', y: -100, color: 0x6BCF7F },
-  { name: 'very_high', y: -180, color: 0x4D96FF }
-];
+// Depth layers (render order)
+const DEPTH_LAYERS = {
+  TERRAIN: -1000,
+  DEBUG_RAILS: -50,
+  OBSTACLES_FAR: 0,      // Obstacles when far
+  OBSTACLES_NEAR: 300,   // Obstacles when approaching
+  CELL_INDICATOR: 450,
+  CONDOR: 500,
+  UI: 600,
+  DEBUG_UI: 700
+};
+
+// Perspective rail system
+const PERSPECTIVE_SYSTEM = {
+  vanishingPoint: { x: 400, y: 200 },  // Punto de fuga
+
+  // Grid lejano (donde spawenean, cerca del punto de fuga)
+  farGrid: {
+    centerX: 400,
+    centerY: 160,
+    width: 200,   // Ancho total del grid
+    height: 160,  // Alto total del grid (5 filas)
+    columns: 5,
+    rows: 5
+  },
+
+  // Grid cercano - COINCIDE CON EL ÁREA DE JUEGO
+  nearGrid: {
+    x: 150,        // Mismo que playArea.x
+    y: 100,        // Mismo que playArea.y
+    width: 500,    // Mismo que playArea.width
+    height: 400,   // Mismo que playArea.height
+    columns: 5,
+    rows: 5
+  }
+};
+
+// Wave configuration
+const WAVE_CONFIG = {
+  spawnZ: 1200,           // Distance where obstacles appear
+  arrivalZ: 100,          // Distance where they reach player
+  waveInterval: 180,      // Frames between waves (3 seconds @ 60fps)
+  obstaclesPerWave: 8     // Number of obstacles per wave
+};
+
+// Wave system state
+let waveSystem = {
+  currentWave: 0,
+  frameCounter: 0,
+  activeObstacles: []
+};
 
 // Terrain colors by height
 const TERRAIN_COLORS = [
@@ -99,6 +152,8 @@ let debugKey;
 let debugVisible = false;
 let debugUI = {};
 let sliders = [];
+let waveText;
+let condorCellIndicator;
 
 // Heightmap generation (simplified Perlin-like noise)
 function noise2D(x, z) {
@@ -274,24 +329,258 @@ function renderHeightmap(gfx, camera) {
   }
 }
 
-// Pseudo-3D projection
+// Simplified pseudo-3D projection
 function project3D(worldX, worldY, z, cameraOffsetY = 0) {
   const scale = FOV / (FOV + z);
   const screenX = 400 + ((worldX - 400) * scale);
   const screenYBase = 300 + (worldY / (z / FOV));
+
   return { x: screenX, y: screenYBase + cameraOffsetY, scale: scale };
 }
 
-function getColorByHeight(worldY) {
-  if (worldY > 50) return 0xFF6B6B;
-  if (worldY > -50) return 0xFFD93D;
-  if (worldY > -120) return 0x6BCF7F;
-  return 0x4D96FF;
+// Generate perspective rails - MATRIX STYLE (no gaps)
+function generatePerspectiveRails() {
+  const rails = [];
+  const { farGrid, nearGrid } = PERSPECTIVE_SYSTEM;
+
+  const cols = nearGrid.columns;
+  const rows = nearGrid.rows;
+
+  // Tamaño de cada celda en el grid cercano (pegados)
+  const cellWidth = nearGrid.width / cols;
+  const cellHeight = nearGrid.height / rows;
+
+  // Tamaño de cada celda en el grid lejano
+  const farCellWidth = farGrid.width / cols;
+  const farCellHeight = farGrid.height / rows;
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const id = row * cols + col;
+
+      // FAR GRID (cerca del punto de fuga)
+      const farCenterX = farGrid.centerX - (farGrid.width / 2) + (col + 0.5) * farCellWidth;
+      const farCenterY = farGrid.centerY - (farGrid.height / 2) + (row + 0.5) * farCellHeight;
+
+      // NEAR GRID (área de juego del jugador) - PEGADOS
+      const nearLeft = nearGrid.x + col * cellWidth;
+      const nearTop = nearGrid.y + row * cellHeight;
+      const nearRight = nearLeft + cellWidth;
+      const nearBottom = nearTop + cellHeight;
+
+      rails.push({
+        id: id,
+        col: col,
+        row: row,
+        // Far corners (pequeños, cerca del punto de fuga)
+        far: {
+          topLeft: {
+            x: farCenterX - farCellWidth / 2,
+            y: farCenterY - farCellHeight / 2
+          },
+          topRight: {
+            x: farCenterX + farCellWidth / 2,
+            y: farCenterY - farCellHeight / 2
+          },
+          bottomLeft: {
+            x: farCenterX - farCellWidth / 2,
+            y: farCenterY + farCellHeight / 2
+          },
+          bottomRight: {
+            x: farCenterX + farCellWidth / 2,
+            y: farCenterY + farCellHeight / 2
+          }
+        },
+        // Near corners (grandes, área de juego) - SIN GAPS
+        near: {
+          topLeft: { x: nearLeft, y: nearTop },
+          topRight: { x: nearRight, y: nearTop },
+          bottomLeft: { x: nearLeft, y: nearBottom },
+          bottomRight: { x: nearRight, y: nearBottom }
+        }
+      });
+    }
+  }
+
+  return rails;
 }
 
-function getRandomHeight() {
-  const lane = Phaser.Utils.Array.GetRandom(HEIGHT_LANES);
-  return lane.y + Phaser.Math.Between(-30, 30);
+const RAILS = generatePerspectiveRails();
+
+// Interpolate quad corners along the rail
+function interpolateQuadAlongRail(rail, z) {
+  const maxZ = WAVE_CONFIG.spawnZ;
+  const minZ = WAVE_CONFIG.arrivalZ;
+
+  // t = 0 when far, t = 1 when near
+  const t = 1 - ((z - minZ) / (maxZ - minZ));
+  const clampedT = Phaser.Math.Clamp(t, 0, 1);
+
+  // Interpolate each corner
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  return {
+    topLeft: {
+      x: lerp(rail.far.topLeft.x, rail.near.topLeft.x, clampedT),
+      y: lerp(rail.far.topLeft.y, rail.near.topLeft.y, clampedT)
+    },
+    topRight: {
+      x: lerp(rail.far.topRight.x, rail.near.topRight.x, clampedT),
+      y: lerp(rail.far.topRight.y, rail.near.topRight.y, clampedT)
+    },
+    bottomLeft: {
+      x: lerp(rail.far.bottomLeft.x, rail.near.bottomLeft.x, clampedT),
+      y: lerp(rail.far.bottomLeft.y, rail.near.bottomLeft.y, clampedT)
+    },
+    bottomRight: {
+      x: lerp(rail.far.bottomRight.x, rail.near.bottomRight.x, clampedT),
+      y: lerp(rail.far.bottomRight.y, rail.near.bottomRight.y, clampedT)
+    },
+    center: {
+      x: lerp(
+        (rail.far.topLeft.x + rail.far.bottomRight.x) / 2,
+        (rail.near.topLeft.x + rail.near.bottomRight.x) / 2,
+        clampedT
+      ),
+      y: lerp(
+        (rail.far.topLeft.y + rail.far.bottomRight.y) / 2,
+        (rail.near.topLeft.y + rail.near.bottomRight.y) / 2,
+        clampedT
+      )
+    },
+    scale: lerp(0.2, 2.0, clampedT)  // For reference
+  };
+}
+
+// Get which rail cell the condor is currently in
+function getCondorCell(condorX, condorY) {
+  const { x, y, width, height, columns, rows } = PERSPECTIVE_SYSTEM.nearGrid;
+
+  // Check if condor is within grid bounds
+  if (condorX < x || condorX > x + width || condorY < y || condorY > y + height) {
+    return null; // Out of bounds
+  }
+
+  const cellWidth = width / columns;
+  const cellHeight = height / rows;
+
+  const col = Math.floor((condorX - x) / cellWidth);
+  const row = Math.floor((condorY - y) / cellHeight);
+
+  // Clamp to valid range
+  const clampedCol = Phaser.Math.Clamp(col, 0, columns - 1);
+  const clampedRow = Phaser.Math.Clamp(row, 0, rows - 1);
+
+  const cellId = clampedRow * columns + clampedCol;
+
+  return {
+    col: clampedCol,
+    row: clampedRow,
+    id: cellId,
+    rail: RAILS[cellId]
+  };
+}
+
+// Check collision between condor and obstacles
+function checkCollisions() {
+  const condorCell = getCondorCell(condor.x, condor.y);
+
+  if (!condorCell) return false; // Condor out of bounds
+
+  // Check if any obstacle is in the same cell and close enough in Z
+  for (let obs of waveSystem.activeObstacles) {
+    // Obstacle is in arrival zone (near player)
+    if (obs.z < WAVE_CONFIG.arrivalZ + 50 && obs.z > WAVE_CONFIG.arrivalZ - 50) {
+      if (obs.railId === condorCell.id) {
+        return obs; // Collision detected!
+      }
+    }
+  }
+
+  return false;
+}
+
+// Generate wave pattern
+function generateWavePattern(waveNumber) {
+  const pattern = [];
+  const availableLanes = [...RAILS];
+
+  // Shuffle available lanes
+  Phaser.Utils.Array.Shuffle(availableLanes);
+
+  // Select random lanes for this wave
+  const count = Math.min(WAVE_CONFIG.obstaclesPerWave, availableLanes.length);
+
+  for (let i = 0; i < count; i++) {
+    const rail = availableLanes[i];
+    pattern.push({
+      laneId: rail.id,
+      type: Phaser.Math.Between(0, 2)
+    });
+  }
+
+  return pattern;
+}
+
+// Create wave
+function spawnWave(scene, waveNumber) {
+  const pattern = generateWavePattern(waveNumber);
+  const newObstacles = [];
+
+  pattern.forEach(data => {
+    const color = Phaser.Math.Between(0, 3) === 0 ? 0xFF6B6B :
+                  Phaser.Math.Between(0, 2) === 0 ? 0xFFD93D : 0x6BCF7F;
+
+    // Use Graphics to draw arbitrary quads
+    const gfx = scene.add.graphics();
+    gfx.setDepth(DEPTH_LAYERS.OBSTACLES_FAR);
+
+    newObstacles.push({
+      sprite: gfx,
+      railId: data.laneId,
+      rail: RAILS[data.laneId],
+      z: WAVE_CONFIG.spawnZ,
+      color: color,
+      type: data.type,
+      waveId: waveNumber
+    });
+  });
+
+  console.log(`Wave ${waveNumber}: spawned ${newObstacles.length} obstacles`);
+  return newObstacles;
+}
+
+// Debug: Visualizar los rieles en perspectiva
+function drawRailsDebug(scene) {
+  const gfx = scene.add.graphics();
+  gfx.setDepth(DEPTH_LAYERS.DEBUG_RAILS);
+
+  RAILS.forEach(rail => {
+    // Draw far quad (spawn) - RED
+    gfx.lineStyle(1, 0xFF0000, 0.5);
+    gfx.strokeRect(
+      rail.far.topLeft.x,
+      rail.far.topLeft.y,
+      rail.far.topRight.x - rail.far.topLeft.x,
+      rail.far.bottomLeft.y - rail.far.topLeft.y
+    );
+
+    // Draw near quad (arrival) - GREEN
+    gfx.lineStyle(1, 0x00FF00, 0.5);
+    gfx.strokeRect(
+      rail.near.topLeft.x,
+      rail.near.topLeft.y,
+      rail.near.topRight.x - rail.near.topLeft.x,
+      rail.near.bottomLeft.y - rail.near.topLeft.y
+    );
+
+    // Connect corners to show rails - YELLOW
+    gfx.lineStyle(1, 0xFFFF00, 0.3);
+    gfx.lineBetween(rail.far.topLeft.x, rail.far.topLeft.y, rail.near.topLeft.x, rail.near.topLeft.y);
+    gfx.lineBetween(rail.far.topRight.x, rail.far.topRight.y, rail.near.topRight.x, rail.near.topRight.y);
+    gfx.lineBetween(rail.far.bottomLeft.x, rail.far.bottomLeft.y, rail.near.bottomLeft.x, rail.near.bottomLeft.y);
+    gfx.lineBetween(rail.far.bottomRight.x, rail.far.bottomRight.y, rail.near.bottomRight.x, rail.near.bottomRight.y);
+  });
 }
 
 function create() {
@@ -309,28 +598,25 @@ function create() {
   });
 
   terrainGraphics = this.add.graphics();
-  terrainGraphics.setDepth(-1000);
+  terrainGraphics.setDepth(DEPTH_LAYERS.TERRAIN);
 
   condor = this.add.rectangle(400, 300, 60, 40, 0x0000ff);
-  condor.setDepth(500);
+  condor.setDepth(DEPTH_LAYERS.CONDOR);
 
-  const obstacleCount = 12;
-  for (let i = 0; i < obstacleCount; i++) {
-    const worldX = (Math.random() * 800 - 400) + 400;
-    const worldY = getRandomHeight();
-    const z = 200 + Math.random() * 800;
-    const color = getColorByHeight(worldY);
-    const sprite = this.add.rectangle(0, 0, 40, 40, color);
-    sprite.setVisible(false); // TEMPORALMENTE OCULTOS
+  // Visual indicator for condor's cell
+  condorCellIndicator = this.add.graphics();
+  condorCellIndicator.setDepth(DEPTH_LAYERS.CELL_INDICATOR);
 
-    obstacles.push({
-      sprite: sprite,
-      worldX: worldX,
-      worldY: worldY,
-      z: z,
-      baseSize: 40
-    });
-  }
+  // Initialize new wave system
+  waveSystem.activeObstacles = [];
+  obstacles = []; // Clear old array
+
+  // Spawn first wave immediately
+  const firstWave = spawnWave(this, 0);
+  waveSystem.activeObstacles.push(...firstWave);
+
+  // Draw perspective rails for debug visualization
+  drawRailsDebug(this);
 
   cursors = this.input.keyboard.createCursorKeys();
   debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
@@ -343,7 +629,16 @@ function create() {
     color: '#ffffff',
     stroke: '#000000',
     strokeThickness: 4
-  }).setOrigin(0.5).setDepth(600);
+  }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
+
+  // Wave UI
+  waveText = this.add.text(20, 20, 'Wave: 0', {
+    fontSize: '18px',
+    fontFamily: 'Arial',
+    color: '#ffffff',
+    stroke: '#000000',
+    strokeThickness: 3
+  }).setDepth(DEPTH_LAYERS.UI);
 
   this.add.text(400, 570, 'Arrows: Move | D: Debug', {
     fontSize: '14px',
@@ -351,12 +646,12 @@ function create() {
     color: '#000000',
     backgroundColor: '#ffffff',
     padding: { x: 5, y: 2 }
-  }).setOrigin(0.5).setDepth(600);
+  }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
 }
 
 function createDebugUI(scene) {
-  debugUI.container = scene.add.container(0, 0).setDepth(700);
-  debugUI.bg = scene.add.rectangle(0, 0, 280, 350, 0x000000, 0.85);
+  debugUI.container = scene.add.container(0, 0).setDepth(DEPTH_LAYERS.DEBUG_UI);
+  debugUI.bg = scene.add.rectangle(0, 0, 280, 480, 0x000000, 0.85);
   debugUI.bg.setOrigin(0, 0);
   debugUI.container.add(debugUI.bg);
 
@@ -380,6 +675,8 @@ function createDebugUI(scene) {
     { label: 'Condor Speed', prop: ['condor', 'speed'], min: 1, max: 10, step: 0.5 },
     { label: 'Smoothing', prop: ['condor', 'smoothing'], min: 0.05, max: 0.5, step: 0.05 },
     { label: 'Obstacle Vel', prop: ['obstacles', 'velocity'], min: 1, max: 15, step: 0.5 },
+    { label: 'Min Speed Mult', prop: ['obstacles', 'minSpeedMultiplier'], min: 0.1, max: 1.0, step: 0.1 },
+    { label: 'Max Speed Mult', prop: ['obstacles', 'maxSpeedMultiplier'], min: 1.0, max: 5.0, step: 0.5 },
     { label: 'Cam Factor', prop: ['camera', 'displacementFactor'], min: 0.3, max: 1.5, step: 0.1 },
     { label: 'Cam Height', prop: ['camera', 'height'], min: 50, max: 200, step: 5 },
     { label: 'Max Cam Disp', prop: ['camera', 'maxDisplacement'], min: 100, max: 400, step: 10 }
@@ -491,13 +788,6 @@ function updateCondor() {
   condor.scaleY = Phaser.Math.Clamp(1 + velY * 0.01, 0.9, 1.1);
 }
 
-function recycleObstacle(obs) {
-  obs.z = CONFIG.render.spawnDistance;
-  obs.worldX = (Math.random() * 800 - 400) + 400;
-  obs.worldY = getRandomHeight();
-  obs.sprite.fillColor = getColorByHeight(obs.worldY);
-}
-
 function update(time, delta) {
   const scene = this;
 
@@ -507,57 +797,148 @@ function update(time, delta) {
   }
 
   updateCondor();
-  // DISABLED: updateRelativeCamera(); // Temporalmente deshabilitado para probar terreno
+  updateRelativeCamera();
+
+  // Update condor cell indicator
+  const condorCell = getCondorCell(condor.x, condor.y);
+  condorCellIndicator.clear();
+
+  if (condorCell) {
+    // Draw the cell the condor is currently in
+    const { topLeft, topRight, bottomLeft, bottomRight } = condorCell.rail.near;
+
+    condorCellIndicator.lineStyle(3, 0x00FFFF, 0.6);
+    condorCellIndicator.strokeRect(
+      topLeft.x,
+      topLeft.y,
+      topRight.x - topLeft.x,
+      bottomLeft.y - topLeft.y
+    );
+
+    // Optional: Fill with semi-transparent color
+    condorCellIndicator.fillStyle(0x00FFFF, 0.1);
+    condorCellIndicator.fillRect(
+      topLeft.x,
+      topLeft.y,
+      topRight.x - topLeft.x,
+      bottomLeft.y - topLeft.y
+    );
+  }
 
   // Update camera worldZ (forward movement)
   CONFIG.camera.worldZ += CONFIG.obstacles.velocity;
 
-  // Keep camera X centered for testing
+  // Keep camera X centered
   CONFIG.camera.worldX = 256; // Center of 512 heightmap
 
   // Render heightmap terrain
   renderHeightmap(terrainGraphics, CONFIG.camera);
 
-  // TEMPORALMENTE DESHABILITADO PARA PROBAR TERRENO
-  /*
-  let closestZ = 1000;
-  obstacles.forEach(obs => {
-    obs.z -= CONFIG.obstacles.velocity;
+  // Frame-based wave system
+  waveSystem.frameCounter++;
 
+  // Spawn new wave every X frames
+  if (waveSystem.frameCounter >= WAVE_CONFIG.waveInterval) {
+    waveSystem.frameCounter = 0;
+    waveSystem.currentWave++;
+    const newWave = spawnWave(scene, waveSystem.currentWave);
+    waveSystem.activeObstacles.push(...newWave);
+  }
+
+  // Update active obstacles
+  let closestZ = 1000;
+
+  // Use reverse iteration to safely remove obstacles with splice
+  for (let i = waveSystem.activeObstacles.length - 1; i >= 0; i--) {
+    const obs = waveSystem.activeObstacles[i];
+
+    // Velocidad dinámica basada en proximidad
+    const proximityFactor = 1 - (obs.z / WAVE_CONFIG.spawnZ);
+    const minSpeed = CONFIG.obstacles.velocity * CONFIG.obstacles.minSpeedMultiplier;
+    const maxSpeed = CONFIG.obstacles.velocity * CONFIG.obstacles.maxSpeedMultiplier;
+    const dynamicSpeed = minSpeed + (maxSpeed - minSpeed) * proximityFactor;
+
+    obs.z -= dynamicSpeed;
+
+    // Remove if passed camera
     if (obs.z < CONFIG.render.despawnDistance) {
-      recycleObstacle(obs);
+      obs.sprite.destroy();
+      waveSystem.activeObstacles.splice(i, 1);
+      continue;
     }
 
     if (obs.z < closestZ) closestZ = obs.z;
 
-    const projected = project3D(obs.worldX, obs.worldY, obs.z, worldDisplacementY);
-    obs.sprite.setPosition(projected.x, projected.y);
-    obs.sprite.setScale(projected.scale);
-    obs.sprite.setDepth(1000 - obs.z);
+    // Interpolate quad along rail
+    const quad = interpolateQuadAlongRail(obs.rail, obs.z);
 
+    // Clear and redraw the quad
+    obs.sprite.clear();
+    obs.sprite.fillStyle(obs.color);
+
+    // Draw quad with 4 corners
+    obs.sprite.beginPath();
+    obs.sprite.moveTo(quad.topLeft.x, quad.topLeft.y);
+    obs.sprite.lineTo(quad.topRight.x, quad.topRight.y);
+    obs.sprite.lineTo(quad.bottomRight.x, quad.bottomRight.y);
+    obs.sprite.lineTo(quad.bottomLeft.x, quad.bottomLeft.y);
+    obs.sprite.closePath();
+    obs.sprite.fillPath();
+
+    // Mapear Z a un rango que NUNCA supere al condor
+    const depthRange = DEPTH_LAYERS.OBSTACLES_NEAR - DEPTH_LAYERS.OBSTACLES_FAR;
+    const normalizedZ = (obs.z - WAVE_CONFIG.arrivalZ) / (WAVE_CONFIG.spawnZ - WAVE_CONFIG.arrivalZ);
+    const obstacleDepth = DEPTH_LAYERS.OBSTACLES_FAR + (depthRange * normalizedZ);
+    obs.sprite.setDepth(Math.floor(obstacleDepth));
+
+    // Fade in/out
     let alpha = 1;
-    if (obs.z > CONFIG.render.fadeInStart) {
-      alpha = (CONFIG.render.spawnDistance - obs.z) / (CONFIG.render.spawnDistance - CONFIG.render.fadeInStart);
+    if (obs.z > WAVE_CONFIG.spawnZ - 200) {
+      alpha = (WAVE_CONFIG.spawnZ - obs.z) / 200;
     }
     if (obs.z < CONFIG.render.fadeOutStart) {
       alpha = obs.z / CONFIG.render.fadeOutStart;
     }
     obs.sprite.setAlpha(Phaser.Math.Clamp(alpha, 0, 1));
-  });
-  */
-  let closestZ = 0; // Para debug
+  }
+
+  // Check for collisions
+  const collision = checkCollisions();
+  if (collision) {
+    console.log(`COLLISION! Wave ${collision.waveId}, Rail ${collision.railId}`);
+
+    // Visual feedback
+    condor.setTint(0xFF0000);
+    scene.time.delayedCall(200, () => {
+      condor.clearTint();
+    });
+
+    // Remove the obstacle
+    collision.sprite.destroy();
+    const index = waveSystem.activeObstacles.indexOf(collision);
+    if (index > -1) {
+      waveSystem.activeObstacles.splice(index, 1);
+    }
+
+    // TODO: Decrease lives, game over, etc.
+  }
+
+  // Update UI text
+  waveText.setText(`Wave: ${waveSystem.currentWave}`);
 
   if (debugVisible) {
     updateSliders(scene);
     const fps = Math.round(1000 / delta);
-    const terrainH = getTerrainHeight(CONFIG.camera.worldX, CONFIG.camera.worldZ);
+    const cellInfo = condorCell ? `Cell: ${condorCell.id} (${condorCell.col},${condorCell.row})` : 'Out of bounds';
+
     debugUI.status.setText([
       `FPS: ${fps}`,
-      `Cam: (${Math.round(CONFIG.camera.worldX)}, ${Math.round(CONFIG.camera.worldZ)})`,
-      `Height: ${Math.round(CONFIG.camera.height)}`,
-      `Terrain: ${Math.round(terrainH)}`,
-      `World Disp Y: ${Math.round(worldDisplacementY)}`,
-      `Closest Z: ${Math.round(closestZ)}`
+      `Wave: ${waveSystem.currentWave}`,
+      `Active: ${waveSystem.activeObstacles.length}`,
+      `Next: ${WAVE_CONFIG.waveInterval - waveSystem.frameCounter}f`,
+      `Closest Z: ${Math.round(closestZ)}`,
+      cellInfo,
+      `Condor: (${Math.round(condor.x)}, ${Math.round(condor.y)})`
     ].join('\n'));
   }
 }
