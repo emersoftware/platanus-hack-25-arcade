@@ -30,7 +30,11 @@ let CONFIG = {
     centerY: 300,
     // Hitbox para colisiones (más pequeño que el visual)
     hitboxWidth: 30,   // 1/2 del ancho visual (60)
-    hitboxHeight: 20   // 1/2 del alto visual (40)
+    hitboxHeight: 20,  // 1/2 del alto visual (40)
+    // Barrel roll / Dash
+    dashDistance: 200, // Doble de una celda (100px por celda)
+    dashSpeed: 20,     // Doble de velocidad normal (10 * 2)
+    dashDuration: 20   // Frames para completar el dash
   },
   camera: {
     worldX: 256,
@@ -159,6 +163,7 @@ let heightmapData = null;
 let terrainGraphics = null;
 let condor;
 let cursors;
+let spaceKey;
 let debugKey;
 let debugVisible = false;
 let debugUI = {};
@@ -167,6 +172,16 @@ let waveText;
 let condorCellIndicator;
 let condorHitboxIndicator;
 let debugRailsGraphics = null;
+
+// Dash / Barrel Roll state
+let isDashing = false;
+let dashProgress = 0;
+let dashDirection = { x: 0, y: 0 };
+let dashStartX = 0;
+let dashStartY = 0;
+let dashTargetX = 0;
+let dashTargetY = 0;
+let dashRotation = 0;
 
 // Heightmap generation (simplified Perlin-like noise)
 function noise2D(x, z) {
@@ -695,6 +710,7 @@ function create() {
   drawRailsDebug(this);
 
   cursors = this.input.keyboard.createCursorKeys();
+  spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
   debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
 
   createDebugUI(this);
@@ -716,7 +732,7 @@ function create() {
     strokeThickness: 3
   }).setDepth(DEPTH_LAYERS.UI);
 
-  this.add.text(400, 570, 'Arrows: Move | D: Debug', {
+  this.add.text(400, 570, 'Arrows: Move | SPACE+Dir: Barrel Roll | D: Debug', {
     fontSize: '14px',
     fontFamily: 'Arial',
     color: '#000000',
@@ -879,7 +895,85 @@ function updateDynamicPerspective() {
   updateDebugRailsGraphics();
 }
 
+// Start dash/barrel roll
+function startDash(dirX, dirY) {
+  if (isDashing) return; // Already dashing
+
+  isDashing = true;
+  dashProgress = 0;
+  dashDirection.x = dirX;
+  dashDirection.y = dirY;
+  dashStartX = condor.x;
+  dashStartY = condor.y;
+
+  // Calculate target position (double of a cell = 200px)
+  dashTargetX = condor.x + dirX * CONFIG.condor.dashDistance;
+  dashTargetY = condor.y + dirY * CONFIG.condor.dashDistance;
+
+  // Clamp to limits
+  dashTargetX = Phaser.Math.Clamp(dashTargetX, CONFIG.limits.minX, CONFIG.limits.maxX);
+  dashTargetY = Phaser.Math.Clamp(dashTargetY, CONFIG.limits.minY, CONFIG.limits.maxY);
+
+  dashRotation = 0;
+}
+
+// Update dash/barrel roll
+function updateDash() {
+  if (!isDashing) return;
+
+  dashProgress++;
+
+  // Linear interpolation for position
+  const t = dashProgress / CONFIG.condor.dashDuration;
+  const easedT = t; // Linear movement (could add easing here)
+
+  condor.x = dashStartX + (dashTargetX - dashStartX) * easedT;
+  condor.y = dashStartY + (dashTargetY - dashStartY) * easedT;
+
+  // Barrel roll rotation for horizontal movement
+  if (dashDirection.x !== 0) {
+    dashRotation = (dashProgress / CONFIG.condor.dashDuration) * Math.PI * 2; // 360 degrees
+    condor.rotation = dashRotation;
+  }
+
+  // End dash
+  if (dashProgress >= CONFIG.condor.dashDuration) {
+    isDashing = false;
+    dashProgress = 0;
+    condor.rotation = 0;
+    dashRotation = 0;
+  }
+}
+
 function updateCondor() {
+  // Check for dash input (SPACE + direction)
+  if (Phaser.Input.Keyboard.JustDown(spaceKey) && !isDashing) {
+    let dirX = 0;
+    let dirY = 0;
+
+    if (cursors.left.isDown) dirX = -1;
+    else if (cursors.right.isDown) dirX = 1;
+
+    if (cursors.up.isDown) dirY = -1;
+    else if (cursors.down.isDown) dirY = 1;
+
+    // Start dash if a direction is pressed
+    if (dirX !== 0 || dirY !== 0) {
+      startDash(dirX, dirY);
+    }
+  }
+
+  // If dashing, update dash instead of normal movement
+  if (isDashing) {
+    updateDash();
+
+    // Store prev positions for camera
+    CONFIG.condor.prevX = condor.x;
+    CONFIG.condor.prevY = condor.y;
+    return;
+  }
+
+  // Normal movement (not dashing)
   let targetX = condor.x;
   let targetY = condor.y;
 
