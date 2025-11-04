@@ -22,15 +22,17 @@ const game = new Phaser.Game(config);
 let CONFIG = {
   width: 800,
   height: 600,
+  // Speed multiplier: 100Hz monitor / 60Hz baseline = 1.67
+  speedMultiplier: 1.67,
   condor: {
     speed: 10,
     smoothing: 0.35,
     prevX: 400,
     prevY: 300,
     centerY: 300,
-    // Hitbox para colisiones (más pequeño que el visual)
-    hitboxWidth: 30,   // 1/2 del ancho visual (60)
-    hitboxHeight: 20,  // 1/2 del alto visual (40)
+    // Hitbox para colisiones (más pequeño que el visual 50×20)
+    hitboxWidth: 35,   // 70% del ancho visual (50 × 0.7)
+    hitboxHeight: 15,  // 75% del alto visual (20 × 0.75)
     // Barrel roll / Dash
     dashDistance: 200, // Doble de una celda (100px por celda)
     dashSpeed: 20,     // Doble de velocidad normal (10 * 2)
@@ -172,6 +174,7 @@ let waveText;
 let condorCellIndicator;
 let condorHitboxIndicator;
 let debugRailsGraphics = null;
+let uiCameraRef = null;
 
 // Dash / Barrel Roll state
 let isDashing = false;
@@ -298,6 +301,10 @@ function renderHeightmap(gfx, camera) {
 
   // Sky/fog color
   const skyR = 135, skyG = 206, skyB = 235;
+
+  // Fill entire screen with sky color to ensure background always covers viewport
+  gfx.fillStyle(0x87CEEB);
+  gfx.fillRect(0, 0, w, h);
 
   // Classic voxel space rendering - simple and direct
   for (let screenX = 0; screenX < w; screenX += step) {
@@ -606,6 +613,11 @@ function spawnWave(scene, waveNumber) {
     const gfx = scene.add.graphics();
     gfx.setDepth(DEPTH_LAYERS.OBSTACLES_FAR);
 
+    // Make UI camera ignore obstacles
+    if (uiCameraRef) {
+      uiCameraRef.ignore(gfx);
+    }
+
     newObstacles.push({
       sprite: gfx,
       railId: data.laneId,
@@ -681,8 +693,9 @@ function create() {
 
   terrainGraphics = this.add.graphics();
   terrainGraphics.setDepth(DEPTH_LAYERS.TERRAIN);
+  terrainGraphics.setScrollFactor(0);
 
-  condor = this.add.rectangle(400, 300, 60, 40, 0x0000ff);
+  condor = this.add.rectangle(400, 300, 50, 20, 0x0000ff);
   condor.setDepth(DEPTH_LAYERS.CONDOR);
 
   // Visual indicator for condor's cell
@@ -698,6 +711,14 @@ function create() {
   mainCamera.setZoom(CONFIG.camera.zoom);
   mainCamera.startFollow(condor, true, CONFIG.camera.followLerp, CONFIG.camera.followLerp);
 
+  // Create separate UI camera (no zoom, no rotation, no scroll)
+  const uiCamera = this.cameras.add(0, 0, CONFIG.width, CONFIG.height);
+  uiCamera.setName('UI Camera');
+  uiCameraRef = uiCamera; // Store reference for other functions
+
+  // Make UI camera ignore game objects
+  uiCamera.ignore([terrainGraphics, condor, condorCellIndicator, condorHitboxIndicator]);
+
   // Initialize new wave system
   waveSystem.activeObstacles = [];
   obstacles = []; // Clear old array
@@ -708,14 +729,15 @@ function create() {
 
   // Draw perspective rails for debug visualization
   drawRailsDebug(this);
+  uiCamera.ignore(debugRailsGraphics);
 
   cursors = this.input.keyboard.createCursorKeys();
   spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
   debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
 
-  createDebugUI(this);
+  createDebugUI(this, mainCamera);
 
-  this.add.text(400, 30, 'CÓNDOR', {
+  const titleText = this.add.text(400, 30, 'CÓNDOR', {
     fontSize: '48px',
     fontFamily: 'Arial',
     color: '#ffffff',
@@ -732,16 +754,19 @@ function create() {
     strokeThickness: 3
   }).setDepth(DEPTH_LAYERS.UI);
 
-  this.add.text(400, 570, 'Arrows: Move | SPACE+Dir: Barrel Roll | D: Debug', {
+  const controlsText = this.add.text(400, 570, 'Arrows: Move | SPACE+Dir: Barrel Roll | D: Debug', {
     fontSize: '14px',
     fontFamily: 'Arial',
     color: '#000000',
     backgroundColor: '#ffffff',
     padding: { x: 5, y: 2 }
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
+
+  // Make main camera ignore UI elements
+  mainCamera.ignore([titleText, waveText, controlsText, debugUI.container]);
 }
 
-function createDebugUI(scene) {
+function createDebugUI(scene, mainCamera) {
   debugUI.container = scene.add.container(0, 0).setDepth(DEPTH_LAYERS.DEBUG_UI);
   debugUI.bg = scene.add.rectangle(0, 0, 280, 640, 0x000000, 0.85);
   debugUI.bg.setOrigin(0, 0);
@@ -918,21 +943,22 @@ function startDash(dirX, dirY) {
 }
 
 // Update dash/barrel roll
-function updateDash() {
+function updateDash(delta) {
   if (!isDashing) return;
 
-  dashProgress++;
+  const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
+  dashProgress += deltaFrames;
 
   // Linear interpolation for position
   const t = dashProgress / CONFIG.condor.dashDuration;
-  const easedT = t; // Linear movement (could add easing here)
+  const easedT = Phaser.Math.Clamp(t, 0, 1);
 
   condor.x = dashStartX + (dashTargetX - dashStartX) * easedT;
   condor.y = dashStartY + (dashTargetY - dashStartY) * easedT;
 
   // Barrel roll rotation for horizontal movement
   if (dashDirection.x !== 0) {
-    dashRotation = (dashProgress / CONFIG.condor.dashDuration) * Math.PI * 2; // 360 degrees
+    dashRotation = easedT * Math.PI * 2; // 360 degrees
     condor.rotation = dashRotation;
   }
 
@@ -945,7 +971,9 @@ function updateDash() {
   }
 }
 
-function updateCondor() {
+function updateCondor(delta) {
+  const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
+
   // Check for dash input (SPACE + direction)
   if (Phaser.Input.Keyboard.JustDown(spaceKey) && !isDashing) {
     let dirX = 0;
@@ -965,7 +993,7 @@ function updateCondor() {
 
   // If dashing, update dash instead of normal movement
   if (isDashing) {
-    updateDash();
+    updateDash(delta);
 
     // Store prev positions for camera
     CONFIG.condor.prevX = condor.x;
@@ -977,10 +1005,12 @@ function updateCondor() {
   let targetX = condor.x;
   let targetY = condor.y;
 
-  if (cursors.left.isDown) targetX -= CONFIG.condor.speed;
-  if (cursors.right.isDown) targetX += CONFIG.condor.speed;
-  if (cursors.up.isDown) targetY -= CONFIG.condor.speed;
-  if (cursors.down.isDown) targetY += CONFIG.condor.speed;
+  const speed = CONFIG.condor.speed * deltaFrames;
+
+  if (cursors.left.isDown) targetX -= speed;
+  if (cursors.right.isDown) targetX += speed;
+  if (cursors.up.isDown) targetY -= speed;
+  if (cursors.down.isDown) targetY += speed;
 
   targetX = Phaser.Math.Clamp(targetX, CONFIG.limits.minX, CONFIG.limits.maxX);
   targetY = Phaser.Math.Clamp(targetY, CONFIG.limits.minY, CONFIG.limits.maxY);
@@ -988,8 +1018,10 @@ function updateCondor() {
   CONFIG.condor.prevX = condor.x;
   CONFIG.condor.prevY = condor.y;
 
-  condor.x += (targetX - condor.x) * CONFIG.condor.smoothing;
-  condor.y += (targetY - condor.y) * CONFIG.condor.smoothing;
+  // Smoothing adjusted for deltaFrames
+  const smoothingAdjusted = 1 - Math.pow(1 - CONFIG.condor.smoothing, deltaFrames);
+  condor.x += (targetX - condor.x) * smoothingAdjusted;
+  condor.y += (targetY - condor.y) * smoothingAdjusted;
 
   const velX = condor.x - CONFIG.condor.prevX;
   const velY = condor.y - CONFIG.condor.prevY;
@@ -1000,13 +1032,14 @@ function updateCondor() {
 
 function update(time, delta) {
   const scene = this;
+  const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
 
   if (Phaser.Input.Keyboard.JustDown(debugKey)) {
     debugVisible = !debugVisible;
     debugUI.container.setVisible(debugVisible);
   }
 
-  updateCondor();
+  updateCondor(delta);
   updateDynamicPerspective();
 
   // Apply camera rotation based on condor movement
@@ -1098,8 +1131,8 @@ function update(time, delta) {
     );
   }
 
-  // Update camera worldZ (forward movement)
-  CONFIG.camera.worldZ += CONFIG.obstacles.velocity;
+  // Update camera worldZ (forward movement) - adjusted for deltaFrames
+  CONFIG.camera.worldZ += CONFIG.obstacles.velocity * deltaFrames;
 
   // Keep camera X centered
   CONFIG.camera.worldX = 256; // Center of 512 heightmap
@@ -1107,8 +1140,8 @@ function update(time, delta) {
   // Render heightmap terrain
   renderHeightmap(terrainGraphics, CONFIG.camera);
 
-  // Frame-based wave system
-  waveSystem.frameCounter++;
+  // Frame-based wave system - adjusted for deltaFrames
+  waveSystem.frameCounter += deltaFrames;
 
   // Spawn new wave every X frames
   if (waveSystem.frameCounter >= WAVE_CONFIG.waveInterval) {
@@ -1131,7 +1164,7 @@ function update(time, delta) {
     const maxSpeed = CONFIG.obstacles.velocity * CONFIG.obstacles.maxSpeedMultiplier;
     const dynamicSpeed = minSpeed + (maxSpeed - minSpeed) * proximityFactor;
 
-    obs.z -= dynamicSpeed;
+    obs.z -= dynamicSpeed * deltaFrames;
 
     // Remove if passed camera
     if (obs.z < CONFIG.render.despawnDistance) {
