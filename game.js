@@ -27,7 +27,10 @@ let CONFIG = {
     smoothing: 0.35,
     prevX: 400,
     prevY: 300,
-    centerY: 300
+    centerY: 300,
+    // Hitbox para colisiones (más pequeño que el visual)
+    hitboxWidth: 30,   // 1/2 del ancho visual (60)
+    hitboxHeight: 20   // 1/2 del alto visual (40)
   },
   camera: {
     worldX: 256,
@@ -162,6 +165,7 @@ let debugUI = {};
 let sliders = [];
 let waveText;
 let condorCellIndicator;
+let condorHitboxIndicator;
 let debugRailsGraphics = null;
 
 // Heightmap generation (simplified Perlin-like noise)
@@ -452,47 +456,99 @@ function interpolateQuadAlongRail(rail, z) {
   };
 }
 
-// Get which rail cell the condor is currently in
-function getCondorCell(condorX, condorY) {
+// Get all rail cells that the condor rectangle occupies
+function getCondorCells() {
   const { x, y, width, height, columns, rows } = PERSPECTIVE_SYSTEM.nearGrid;
 
-  // Check if condor is within grid bounds
-  if (condorX < x || condorX > x + width || condorY < y || condorY > y + height) {
-    return null; // Out of bounds
-  }
+  // Get condor bounds (full rectangle)
+  const condorBounds = {
+    left: condor.x - condor.width / 2,
+    right: condor.x + condor.width / 2,
+    top: condor.y - condor.height / 2,
+    bottom: condor.y + condor.height / 2
+  };
 
   const cellWidth = width / columns;
   const cellHeight = height / rows;
 
-  const col = Math.floor((condorX - x) / cellWidth);
-  const row = Math.floor((condorY - y) / cellHeight);
+  const cells = [];
 
-  // Clamp to valid range
-  const clampedCol = Phaser.Math.Clamp(col, 0, columns - 1);
-  const clampedRow = Phaser.Math.Clamp(row, 0, rows - 1);
+  // Find which columns the condor spans
+  const startCol = Math.floor((condorBounds.left - x) / cellWidth);
+  const endCol = Math.floor((condorBounds.right - x) / cellWidth);
 
-  const cellId = clampedRow * columns + clampedCol;
+  // Find which rows the condor spans
+  const startRow = Math.floor((condorBounds.top - y) / cellHeight);
+  const endRow = Math.floor((condorBounds.bottom - y) / cellHeight);
 
-  return {
-    col: clampedCol,
-    row: clampedRow,
-    id: cellId,
-    rail: RAILS[cellId]
-  };
+  // Iterate through all cells the condor touches
+  for (let row = startRow; row <= endRow; row++) {
+    for (let col = startCol; col <= endCol; col++) {
+      // Clamp to valid range
+      const clampedCol = Phaser.Math.Clamp(col, 0, columns - 1);
+      const clampedRow = Phaser.Math.Clamp(row, 0, rows - 1);
+
+      const cellId = clampedRow * columns + clampedCol;
+
+      // Avoid duplicate cells if clamping caused overlap
+      if (!cells.find(c => c.id === cellId)) {
+        cells.push({
+          col: clampedCol,
+          row: clampedRow,
+          id: cellId,
+          rail: RAILS[cellId]
+        });
+      }
+    }
+  }
+
+  return cells.length > 0 ? cells : null;
 }
 
 // Check collision between condor and obstacles
 function checkCollisions() {
-  const condorCell = getCondorCell(condor.x, condor.y);
+  // Get all cells the condor occupies (based on full visual rectangle)
+  const condorCells = getCondorCells();
+  if (!condorCells) return false; // Condor out of bounds
 
-  if (!condorCell) return false; // Condor out of bounds
+  // Get condor HITBOX (smaller than visual, centered)
+  const condorHitbox = {
+    left: condor.x - CONFIG.condor.hitboxWidth / 2,
+    right: condor.x + CONFIG.condor.hitboxWidth / 2,
+    top: condor.y - CONFIG.condor.hitboxHeight / 2,
+    bottom: condor.y + CONFIG.condor.hitboxHeight / 2
+  };
 
-  // Check if any obstacle is in the same cell and close enough in Z
+  // Check if any obstacle is in arrival zone and intersects with condor hitbox
   for (let obs of waveSystem.activeObstacles) {
     // Obstacle is in arrival zone (near player)
     if (obs.z < WAVE_CONFIG.arrivalZ + 50 && obs.z > WAVE_CONFIG.arrivalZ - 50) {
-      if (obs.railId === condorCell.id) {
-        return obs; // Collision detected!
+      // Check if obstacle is in any of the cells the condor occupies
+      const obstacleInCondorCell = condorCells.some(cell => cell.id === obs.railId);
+
+      if (obstacleInCondorCell) {
+        // Get obstacle quad at current Z position
+        const quad = interpolateQuadAlongRail(obs.rail, obs.z);
+
+        // Calculate obstacle bounds from quad corners
+        const obsBounds = {
+          left: Math.min(quad.topLeft.x, quad.bottomLeft.x),
+          right: Math.max(quad.topRight.x, quad.bottomRight.x),
+          top: Math.min(quad.topLeft.y, quad.topRight.y),
+          bottom: Math.max(quad.bottomLeft.y, quad.bottomRight.y)
+        };
+
+        // Check rectangle intersection (AABB collision) with HITBOX
+        const intersects = !(
+          condorHitbox.right < obsBounds.left ||
+          condorHitbox.left > obsBounds.right ||
+          condorHitbox.bottom < obsBounds.top ||
+          condorHitbox.top > obsBounds.bottom
+        );
+
+        if (intersects) {
+          return obs; // Collision detected!
+        }
       }
     }
   }
@@ -617,6 +673,10 @@ function create() {
   // Visual indicator for condor's cell
   condorCellIndicator = this.add.graphics();
   condorCellIndicator.setDepth(DEPTH_LAYERS.CELL_INDICATOR);
+
+  // Visual indicator for condor's hitbox (collision area)
+  condorHitboxIndicator = this.add.graphics();
+  condorHitboxIndicator.setDepth(DEPTH_LAYERS.UI - 1); // Dibuja encima del condor
 
   // Configure main camera with zoom and follow
   const mainCamera = this.cameras.main;
@@ -865,29 +925,54 @@ function update(time, delta) {
 
   updateRelativeCamera();
 
-  // Update condor cell indicator
-  const condorCell = getCondorCell(condor.x, condor.y);
+  // Update condor cell indicator - draw ALL cells the condor occupies
+  const condorCells = getCondorCells();
   condorCellIndicator.clear();
 
-  if (condorCell) {
-    // Draw the cell the condor is currently in
-    const { topLeft, topRight, bottomLeft, bottomRight } = condorCell.rail.near;
+  if (condorCells) {
+    // Draw all cells the condor is currently in
+    condorCells.forEach(cell => {
+      const { topLeft, topRight, bottomLeft, bottomRight } = cell.rail.near;
 
-    condorCellIndicator.lineStyle(3, 0x00FFFF, 0.6);
-    condorCellIndicator.strokeRect(
-      topLeft.x,
-      topLeft.y,
-      topRight.x - topLeft.x,
-      bottomLeft.y - topLeft.y
+      condorCellIndicator.lineStyle(3, 0x00FFFF, 0.6);
+      condorCellIndicator.strokeRect(
+        topLeft.x,
+        topLeft.y,
+        topRight.x - topLeft.x,
+        bottomLeft.y - topLeft.y
+      );
+
+      // Fill with semi-transparent color
+      condorCellIndicator.fillStyle(0x00FFFF, 0.1);
+      condorCellIndicator.fillRect(
+        topLeft.x,
+        topLeft.y,
+        topRight.x - topLeft.x,
+        bottomLeft.y - topLeft.y
+      );
+    });
+  }
+
+  // Draw hitbox indicator (collision area - smaller than visual)
+  condorHitboxIndicator.clear();
+  if (debugVisible) {
+    const hitboxX = condor.x - CONFIG.condor.hitboxWidth / 2;
+    const hitboxY = condor.y - CONFIG.condor.hitboxHeight / 2;
+
+    condorHitboxIndicator.lineStyle(2, 0xFF0000, 0.8); // Red border
+    condorHitboxIndicator.strokeRect(
+      hitboxX,
+      hitboxY,
+      CONFIG.condor.hitboxWidth,
+      CONFIG.condor.hitboxHeight
     );
 
-    // Optional: Fill with semi-transparent color
-    condorCellIndicator.fillStyle(0x00FFFF, 0.1);
-    condorCellIndicator.fillRect(
-      topLeft.x,
-      topLeft.y,
-      topRight.x - topLeft.x,
-      bottomLeft.y - topLeft.y
+    condorHitboxIndicator.fillStyle(0xFF0000, 0.2); // Red semi-transparent fill
+    condorHitboxIndicator.fillRect(
+      hitboxX,
+      hitboxY,
+      CONFIG.condor.hitboxWidth,
+      CONFIG.condor.hitboxHeight
     );
   }
 
@@ -995,7 +1080,9 @@ function update(time, delta) {
   if (debugVisible) {
     updateSliders(scene);
     const fps = Math.round(1000 / delta);
-    const cellInfo = condorCell ? `Cell: ${condorCell.id} (${condorCell.col},${condorCell.row})` : 'Out of bounds';
+    const cellInfo = condorCells
+      ? `Cells: [${condorCells.map(c => c.id).join(',')}]`
+      : 'Out of bounds';
 
     debugUI.status.setText([
       `FPS: ${fps}`,
