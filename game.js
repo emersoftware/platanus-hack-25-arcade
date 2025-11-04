@@ -456,16 +456,16 @@ function interpolateQuadAlongRail(rail, z) {
   };
 }
 
-// Get all rail cells that the condor rectangle occupies
+// Get all rail cells that the condor HITBOX occupies (same as collision)
 function getCondorCells() {
   const { x, y, width, height, columns, rows } = PERSPECTIVE_SYSTEM.nearGrid;
 
-  // Get condor bounds (full rectangle)
+  // Get condor HITBOX bounds (same as collision detection - 30×20)
   const condorBounds = {
-    left: condor.x - condor.width / 2,
-    right: condor.x + condor.width / 2,
-    top: condor.y - condor.height / 2,
-    bottom: condor.y + condor.height / 2
+    left: condor.x - CONFIG.condor.hitboxWidth / 2,
+    right: condor.x + CONFIG.condor.hitboxWidth / 2,
+    top: condor.y - CONFIG.condor.hitboxHeight / 2,
+    bottom: condor.y + CONFIG.condor.hitboxHeight / 2
   };
 
   const cellWidth = width / columns;
@@ -473,15 +473,15 @@ function getCondorCells() {
 
   const cells = [];
 
-  // Find which columns the condor spans
+  // Find which columns the condor hitbox spans
   const startCol = Math.floor((condorBounds.left - x) / cellWidth);
   const endCol = Math.floor((condorBounds.right - x) / cellWidth);
 
-  // Find which rows the condor spans
+  // Find which rows the condor hitbox spans
   const startRow = Math.floor((condorBounds.top - y) / cellHeight);
   const endRow = Math.floor((condorBounds.bottom - y) / cellHeight);
 
-  // Iterate through all cells the condor touches
+  // Iterate through all cells the condor hitbox touches
   for (let row = startRow; row <= endRow; row++) {
     for (let col = startCol; col <= endCol; col++) {
       // Clamp to valid range
@@ -507,11 +507,11 @@ function getCondorCells() {
 
 // Check collision between condor and obstacles
 function checkCollisions() {
-  // Get all cells the condor occupies (based on full visual rectangle)
+  // Get all cells the condor HITBOX occupies (30×20 red box)
   const condorCells = getCondorCells();
   if (!condorCells) return false; // Condor out of bounds
 
-  // Get condor HITBOX (smaller than visual, centered)
+  // Get condor HITBOX bounds (same as used for cell detection)
   const condorHitbox = {
     left: condor.x - CONFIG.condor.hitboxWidth / 2,
     right: condor.x + CONFIG.condor.hitboxWidth / 2,
@@ -925,30 +925,58 @@ function update(time, delta) {
 
   updateRelativeCamera();
 
-  // Update condor cell indicator - draw ALL cells the condor occupies
+  // Update condor cell indicator - draw ALL rails the condor occupies (far to near)
   const condorCells = getCondorCells();
   condorCellIndicator.clear();
 
   if (condorCells) {
-    // Draw all cells the condor is currently in
+    // Draw all rails the condor is currently in (from far to near)
     condorCells.forEach(cell => {
-      const { topLeft, topRight, bottomLeft, bottomRight } = cell.rail.near;
+      const rail = cell.rail;
 
-      condorCellIndicator.lineStyle(3, 0x00FFFF, 0.6);
-      condorCellIndicator.strokeRect(
-        topLeft.x,
-        topLeft.y,
-        topRight.x - topLeft.x,
-        bottomLeft.y - topLeft.y
+      // Draw connecting lines from far to near (4 corners)
+      condorCellIndicator.lineStyle(2, 0x00FFFF, 0.6);
+
+      // Top-left corner line
+      condorCellIndicator.lineBetween(
+        rail.far.topLeft.x, rail.far.topLeft.y,
+        rail.near.topLeft.x, rail.near.topLeft.y
       );
 
-      // Fill with semi-transparent color
-      condorCellIndicator.fillStyle(0x00FFFF, 0.1);
-      condorCellIndicator.fillRect(
-        topLeft.x,
-        topLeft.y,
-        topRight.x - topLeft.x,
-        bottomLeft.y - topLeft.y
+      // Top-right corner line
+      condorCellIndicator.lineBetween(
+        rail.far.topRight.x, rail.far.topRight.y,
+        rail.near.topRight.x, rail.near.topRight.y
+      );
+
+      // Bottom-left corner line
+      condorCellIndicator.lineBetween(
+        rail.far.bottomLeft.x, rail.far.bottomLeft.y,
+        rail.near.bottomLeft.x, rail.near.bottomLeft.y
+      );
+
+      // Bottom-right corner line
+      condorCellIndicator.lineBetween(
+        rail.far.bottomRight.x, rail.far.bottomRight.y,
+        rail.near.bottomRight.x, rail.near.bottomRight.y
+      );
+
+      // Far quad border (recuadro)
+      condorCellIndicator.lineStyle(2, 0x00FFFF, 0.8);
+      condorCellIndicator.strokeRect(
+        rail.far.topLeft.x,
+        rail.far.topLeft.y,
+        rail.far.topRight.x - rail.far.topLeft.x,
+        rail.far.bottomLeft.y - rail.far.topLeft.y
+      );
+
+      // Near quad border (thicker)
+      condorCellIndicator.lineStyle(3, 0x00FFFF, 0.8);
+      condorCellIndicator.strokeRect(
+        rail.near.topLeft.x,
+        rail.near.topLeft.y,
+        rail.near.topRight.x - rail.near.topLeft.x,
+        rail.near.bottomLeft.y - rail.near.topLeft.y
       );
     });
   }
