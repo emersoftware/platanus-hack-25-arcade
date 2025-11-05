@@ -1,6 +1,13 @@
 // CÓNDOR - Heightmap + Sprite Hybrid Rail Shooter
 // Combines heightmap terrain (Comanche-style) with pseudo-3D sprites
 
+// Sprite data URIs
+const CONDOR_SPRITE_DATA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJYAAAAUCAYAAABvecQxAAAD1ElEQVR4Ae3BS24bZxCF0a+UDGp+a0FGFh54MRzWndck+MMG2ECDoV42KUuIzyH47bf7C84kLa7YDu5g8W1xFnwP7kDS4ort4MHWH38tzuKfv4MvbPFtcRZ8Dx4oOJC0uMF28AMW3xYHwffgB0ha3GA7+ADrj78WB/HP38EXtPi2OAi+Bw/yp6TFKyQtDmwHDyRp8QaSFhe2gxdIWlyxHTyQpMUV28H/QHAgaXGQmcwML7Ed3LDOuCHOuEHS4gWZycxwZDt4haTFK2wHz1hn3BBnPEPS4hW2gw+0zrghzniAPyUtnjEzZCabmeEWSYsL28E7SFq8IjPZzAzXJC0ubAdvkJlsZoadpMWF7eAHSFrckJlsZob/k+BA0uKsu6kqdpnJbmZ4q8zkaGZ4q8xkNzPsupuqYmM7eANJi4vM5GhmeElmcsvM8JLM5Ghm2NkOHkzS4kpmcjQzXLMd3METZ5KWpMVZd1NVbLqbzcywy0wyk6PMJDPJTDKTzCQzuZaZZCaZSWaSmWQmR5lJZrKbGTbdzaaq6G42kpakxStsBxczw1Fm8pzM5DmZyXMyk6OZYWc7eDBJi4vMJDN5TmaSmewkLe4guCJpcdbd7KqKXWbyEWaGXXezqyo2toN3krQ4yEweaWY4sh18AEmLs8xkZthkJrfMDJvMZGbY2A5+0hMHkhYXVcWmquhudjPDzPAoM8PMsOtuqopNVbGTtHgn22E7uDidTpxOJ+7tdDpxOp3Y2Q7bwQebGXYzw7WZYTcz3FNwg6TFle5mU1V8hO5mU1Vcsx38JEmLi+6mqrglM7llZrilu6kqdraDDyZpdTdVxVFmcjQzHHU3VYXt4Cc9cYPtsB0cVBVVRXfT3ey6m013817dzaa72XU33U1VUVUc2Q7bwR3YDi6qiu5m090czQzXZoaj7mbT3VQVO9vBL9TddDe7mWE3M+y6m+7mnoI3krQ46G42VUV3U1V0N1XFW3Q3VUV3U1V0N5uq4sh28GCSFgfdTVWxy0yOZoZdd1NVHNkOfiFJi7PuZldV3NLd7KqKje3gJwU/QNLigWwHv4ikxZXM5GhmuGY7+EQkLc66m6riJd1NVbGxHdxB8CCSFjfYDr4ISYuzzORoZtjYDj4xSYt3sB3cyRMPIGnxDEmL3z6E7eCNbAd39MSdSVq8QtLik5O0uJgZdjPDTtLii8hMrmUmjxLckaTFO9gOPiFJiyuZyWZmuGY7+MQkLS4yk83MsLMd3NkTd2Q7eCPbwSdlO7gyM8wM12wHv/1H8CCSFjfYDr4QSYsbbAdfiKTFDbaDB/gXg94cRwnDgscAAAAASUVORK5CYII=';
+
+const OBSTACLES_SPRITE_0 = 'data:image/png;base64,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';
+const OBSTACLES_SPRITE_1 = 'data:image/png;base64,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';
+const OBSTACLES_SPRITE_2 = 'data:image/png;base64,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';
+
 const config = {
   type: Phaser.AUTO,
   width: 800,
@@ -606,24 +613,26 @@ function spawnWave(scene, waveNumber) {
   const newObstacles = [];
 
   pattern.forEach(data => {
-    const color = Phaser.Math.Between(0, 3) === 0 ? 0xFF6B6B :
-                  Phaser.Math.Between(0, 2) === 0 ? 0xFFD93D : 0x6BCF7F;
+    // Pick random obstacle type (0, 1, or 2)
+    const obstacleType = Phaser.Math.Between(0, 2);
 
-    // Use Graphics to draw arbitrary quads
-    const gfx = scene.add.graphics();
-    gfx.setDepth(DEPTH_LAYERS.OBSTACLES_FAR);
+    // Create sprite with independent texture
+    const obstacleSprite = scene.add.sprite(0, 0, 'obstacle' + obstacleType);
+    obstacleSprite.setDepth(DEPTH_LAYERS.OBSTACLES_FAR);
+    obstacleSprite.setOrigin(0.5, 0.5); // Center origin
+    obstacleSprite.setTint(0xFFFFFF); // Ensure white tint (no color modification)
 
     // Make UI camera ignore obstacles
     if (uiCameraRef) {
-      uiCameraRef.ignore(gfx);
+      uiCameraRef.ignore(obstacleSprite);
     }
 
     newObstacles.push({
-      sprite: gfx,
+      sprite: obstacleSprite,
       railId: data.laneId,
       rail: RAILS[data.laneId],
       z: WAVE_CONFIG.spawnZ,
-      color: color,
+      obstacleType: obstacleType, // Store which obstacle type
       type: data.type,
       waveId: waveNumber
     });
@@ -695,8 +704,58 @@ function create() {
   terrainGraphics.setDepth(DEPTH_LAYERS.TERRAIN);
   terrainGraphics.setScrollFactor(0);
 
-  condor = this.add.rectangle(400, 300, 50, 20, 0x0000ff);
+  // Load condor spritesheet from base64 (150×20px, 3 frames of 50×20 each)
+  const condorTex = this.textures.addBase64('condor', CONDOR_SPRITE_DATA);
+  condorTex.once('onload', () => {
+    // Get texture and define frames manually
+    const texture = this.textures.get('condor');
+
+    // Add individual frames with string names (source index 0, x, y, width, height)
+    texture.add('frame0', 0, 0, 0, 50, 20);
+    texture.add('frame1', 0, 50, 0, 50, 20);
+    texture.add('frame2', 0, 100, 0, 50, 20);
+
+    // Also add numeric frames for compatibility
+    texture.add(0, 0, 0, 0, 50, 20);
+    texture.add(1, 0, 50, 0, 50, 20);
+    texture.add(2, 0, 100, 0, 50, 20);
+
+    // Create flying animation
+    if (!this.anims.exists('condor_fly')) {
+      this.anims.create({
+        key: 'condor_fly',
+        frames: this.anims.generateFrameNumbers('condor', { start: 0, end: 2 }),
+        frameRate: 10,
+        repeat: -1
+      });
+    }
+
+    // Start animation if condor exists
+    if (condor) {
+      condor.play('condor_fly');
+    }
+  });
+
+  // Create condor sprite (will use frame 0 initially)
+  condor = this.add.sprite(400, 300, 'condor', 0);
   condor.setDepth(DEPTH_LAYERS.CONDOR);
+
+  // Load 3 independent obstacle textures (each 50×40px)
+  let obstaclesLoaded = 0;
+  const checkAllObstaclesLoaded = () => {
+    obstaclesLoaded++;
+    if (obstaclesLoaded === 3) {
+      // All obstacles loaded, spawn first wave
+      console.log('All obstacle textures loaded, spawning first wave');
+      const firstWave = spawnWave(scene, 0);
+      waveSystem.activeObstacles.push(...firstWave);
+    }
+  };
+
+  // Load each obstacle texture independently
+  this.textures.addBase64('obstacle0', OBSTACLES_SPRITE_0).once('onload', checkAllObstaclesLoaded);
+  this.textures.addBase64('obstacle1', OBSTACLES_SPRITE_1).once('onload', checkAllObstaclesLoaded);
+  this.textures.addBase64('obstacle2', OBSTACLES_SPRITE_2).once('onload', checkAllObstaclesLoaded);
 
   // Visual indicator for condor's cell
   condorCellIndicator = this.add.graphics();
@@ -723,9 +782,7 @@ function create() {
   waveSystem.activeObstacles = [];
   obstacles = []; // Clear old array
 
-  // Spawn first wave immediately
-  const firstWave = spawnWave(this, 0);
-  waveSystem.activeObstacles.push(...firstWave);
+  // First wave will be spawned in obstaclesTex.onload callback
 
   // Draw perspective rails for debug visualization
   drawRailsDebug(this);
@@ -1175,21 +1232,18 @@ function update(time, delta) {
 
     if (obs.z < closestZ) closestZ = obs.z;
 
-    // Interpolate quad along rail
+    // Interpolate quad along rail to get position and scale
     const quad = interpolateQuadAlongRail(obs.rail, obs.z);
 
-    // Clear and redraw the quad
-    obs.sprite.clear();
-    obs.sprite.fillStyle(obs.color);
+    // Position sprite at center of quad
+    obs.sprite.setPosition(quad.center.x, quad.center.y);
 
-    // Draw quad with 4 corners
-    obs.sprite.beginPath();
-    obs.sprite.moveTo(quad.topLeft.x, quad.topLeft.y);
-    obs.sprite.lineTo(quad.topRight.x, quad.topRight.y);
-    obs.sprite.lineTo(quad.bottomRight.x, quad.bottomRight.y);
-    obs.sprite.lineTo(quad.bottomLeft.x, quad.bottomLeft.y);
-    obs.sprite.closePath();
-    obs.sprite.fillPath();
+    // Scale sprite based on Z distance
+    // Sprite base size: 50×40
+    // Near cell size: 100×80 (requires 2x scale)
+    // quad.scale already goes from 0.2 (far) to 2.0 (near)
+    // At near: quad.scale=2.0 → 50*2=100, 40*2=80 ✓
+    obs.sprite.setScale(quad.scale, quad.scale);
 
     // Mapear Z a un rango que NUNCA supere al condor
     const depthRange = DEPTH_LAYERS.OBSTACLES_NEAR - DEPTH_LAYERS.OBSTACLES_FAR;
