@@ -92,8 +92,6 @@ let CONFIG = {
   }
 };
 
-const FOV = 300;
-
 // Depth layers (render order)
 const DEPTH_LAYERS = {
   TERRAIN: -1000,
@@ -155,12 +153,10 @@ const TERRAIN_COLORS = [
   { h: 0, c: 0x5D4E37 },
 ];
 
-// 4x4 Bayer matrix for ordered dithering
+// 2x2 Bayer matrix for ordered dithering (lighter)
 const BAYER_MATRIX = [
-  [0, 8, 2, 10],
-  [12, 4, 14, 6],
-  [3, 11, 1, 9],
-  [15, 7, 13, 5]
+  [0, 2],
+  [3, 1]
 ];
 
 // Game state
@@ -177,11 +173,20 @@ let debugKey;
 let debugVisible = false;
 let debugUI = {};
 let sliders = [];
-let waveText;
+let scoreText;
+let gameOverText;
 let condorCellIndicator;
 let condorHitboxIndicator;
 let debugRailsGraphics = null;
 let uiCameraRef = null;
+
+// Game logic
+let score = 0;
+let gameOver = false;
+let gameOverTimer = 0;
+let isStartScreen = true;
+let startScreenUI = {};
+let sceneRef = null;
 
 // Audio system
 let audioCtx = null;
@@ -268,7 +273,7 @@ function getTerrainColor(h) {
 }
 
 function getBayerThreshold(x, y) {
-  return BAYER_MATRIX[y % 4][x % 4] / 16;
+  return BAYER_MATRIX[y % 2][x % 2] / 4;
 }
 
 function applyDithering(color, x, y, intensity = 32) {
@@ -292,19 +297,6 @@ function applyDithering(color, x, y, intensity = 32) {
   };
 
   return (quantize(r) << 16) | (quantize(g) << 8) | quantize(b);
-}
-
-function reducePalette(color, levels = 8) {
-  const r = (color >> 16) & 0xFF;
-  const g = (color >> 8) & 0xFF;
-  const b = color & 0xFF;
-
-  const step = 255 / (levels - 1);
-  const nr = Math.round(r / step) * step;
-  const ng = Math.round(g / step) * step;
-  const nb = Math.round(b / step) * step;
-
-  return (nr << 16) | (ng << 8) | nb;
 }
 
 function renderHeightmap(gfx, camera) {
@@ -855,40 +847,112 @@ function startMusic() {
   }, 100);
 }
 
+// Start game (from start screen)
+function startGame() {
+  if (!sceneRef) return;
+
+  isStartScreen = false;
+  gameOver = false;
+  score = 0;
+
+  // Hide start screen UI
+  startScreenUI.title.setVisible(false);
+  startScreenUI.instruction.setVisible(false);
+
+  // Show game UI
+  scoreText.setVisible(true);
+  debugRailsGraphics.setVisible(true);
+  condorCellIndicator.setVisible(true);
+
+  // Initialize audio on first start
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().then(() => {
+      startMusic();
+      console.log('Jungle beats started! 🎵');
+    });
+  } else if (audioCtx && audioCtx.state !== 'running') {
+    startMusic();
+    console.log('Jungle beats started! 🎵');
+  }
+
+  // Reset condor
+  condor.x = 400;
+  condor.y = 300;
+  condor.rotation = 0;
+  condor.setAlpha(1);
+  condor.clearTint();
+
+  // Reset dash
+  isDashing = false;
+  dashProgress = 0;
+
+  // Clear obstacles
+  waveSystem.activeObstacles.forEach(obs => obs.sprite.destroy());
+  waveSystem.activeObstacles = [];
+
+  // Reset wave system
+  waveSystem.currentWave = 0;
+  waveSystem.frameCounter = 0;
+
+  // Spawn first wave
+  const firstWave = spawnWave(sceneRef, 0);
+  waveSystem.activeObstacles.push(...firstWave);
+
+  // Update score
+  scoreText.setText('Score: 0');
+}
+
+// Return to start screen (from game over)
+function returnToStartScreen() {
+  if (!sceneRef) return;
+
+  isStartScreen = true;
+  gameOver = false;
+  gameOverTimer = 0;
+
+  // Hide game over UI
+  gameOverText.setVisible(false);
+  scoreText.setVisible(false);
+
+  // Show start screen UI
+  startScreenUI.title.setVisible(true);
+  startScreenUI.instruction.setVisible(true);
+
+  // Clear obstacles
+  waveSystem.activeObstacles.forEach(obs => obs.sprite.destroy());
+  waveSystem.activeObstacles = [];
+
+  // Hide grid/rails
+  debugRailsGraphics.clear();
+  debugRailsGraphics.setVisible(false);
+  condorCellIndicator.clear();
+  condorCellIndicator.setVisible(false);
+
+  // Reset condor visual
+  condor.x = 400;
+  condor.y = 300;
+  condor.rotation = 0;
+  condor.setAlpha(1);
+  condor.clearTint();
+}
+
+// Restart game (when pressing space in game over)
+function restartGame() {
+  gameOverTimer = 0;
+  gameOverText.setVisible(false);
+  startGame();
+}
+
 function create() {
   const scene = this;
+  sceneRef = this; // Store reference for restart
 
-  // Initialize audio system
+  // Initialize audio system (music starts when game starts, not immediately)
   if (!audioCtx) {
     audioCtx = this.sound.context;
     masterGain = audioCtx.createGain();
     masterGain.gain.setValueAtTime(0.5, audioCtx.currentTime);
     masterGain.connect(audioCtx.destination);
-
-    // Flag to ensure music only starts once
-    let musicStarted = false;
-
-    // Function to start music (only once)
-    const initMusic = () => {
-      if (musicStarted) return; // Prevent multiple starts
-      musicStarted = true;
-      
-      if (audioCtx.state === 'suspended') {
-        audioCtx.resume().then(() => {
-          startMusic();
-          console.log('Jungle beats started! 🎵');
-        });
-      } else {
-        startMusic();
-        console.log('Jungle beats started! 🎵');
-      }
-    };
-
-    // Start music on first user interaction (mouse OR keyboard)
-    this.input.once('pointerdown', initMusic);
-    
-    // Also start on keyboard press - but use the same function
-    this.input.keyboard.once('keydown', initMusic);
   }
 
   // Store initial farGrid centerY as the base for dynamic perspective
@@ -950,10 +1014,9 @@ function create() {
   const checkAllObstaclesLoaded = () => {
     obstaclesLoaded++;
     if (obstaclesLoaded === 3) {
-      // All obstacles loaded, spawn first wave
-      console.log('All obstacle textures loaded, spawning first wave');
-      const firstWave = spawnWave(scene, 0);
-      waveSystem.activeObstacles.push(...firstWave);
+      // All obstacles loaded
+      console.log('All obstacle textures loaded');
+      // DON'T spawn first wave - it will be spawned when game starts
     }
   };
 
@@ -962,9 +1025,10 @@ function create() {
   this.textures.addBase64('obstacle1', OBSTACLES_SPRITE_1).once('onload', checkAllObstaclesLoaded);
   this.textures.addBase64('obstacle2', OBSTACLES_SPRITE_2).once('onload', checkAllObstaclesLoaded);
 
-  // Visual indicator for condor's cell
+  // Visual indicator for condor's cell (hidden in start screen)
   condorCellIndicator = this.add.graphics();
   condorCellIndicator.setDepth(DEPTH_LAYERS.CELL_INDICATOR);
+  condorCellIndicator.setVisible(false);
 
   // Visual indicator for condor's hitbox (collision area)
   condorHitboxIndicator = this.add.graphics();
@@ -989,8 +1053,9 @@ function create() {
 
   // First wave will be spawned in obstaclesTex.onload callback
 
-  // Draw perspective rails for debug visualization
+  // Draw perspective rails for debug visualization (hidden in start screen)
   drawRailsDebug(this);
+  debugRailsGraphics.setVisible(false);
   uiCamera.ignore(debugRailsGraphics);
 
   cursors = this.input.keyboard.createCursorKeys();
@@ -999,33 +1064,56 @@ function create() {
 
   createDebugUI(this, mainCamera);
 
-  const titleText = this.add.text(400, 30, 'CÓNDOR', {
-    fontSize: '48px',
+  // Score UI (hidden initially - only shown when game starts)
+  scoreText = this.add.text(20, 20, 'Score: 0', {
+    fontSize: '24px',
     fontFamily: 'Arial',
     color: '#ffffff',
     stroke: '#000000',
     strokeThickness: 4
+  }).setDepth(DEPTH_LAYERS.UI).setVisible(false);
+
+  // Game Over UI (hidden initially)
+  gameOverText = this.add.text(400, 300, '', {
+    fontSize: '48px',
+    fontFamily: 'Arial',
+    color: '#ff0000',
+    stroke: '#000000',
+    strokeThickness: 6,
+    align: 'center'
+  }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI).setVisible(false);
+
+  // Start Screen UI
+  const asciiArt = `
+ ▄████████  ▄██████▄  ███▄▄▄▄   ████████▄   ▄██████▄     ▄████████
+███    ███ ███    ███ ███▀▀▀██▄ ███   ▀███ ███    ███   ███    ███
+███    █▀  ███    ███ ███   ███ ███    ███ ███    ███   ███    ███
+███        ███    ███ ███   ███ ███    ███ ███    ███  ▄███▄▄▄▄██▀
+███        ███    ███ ███   ███ ███    ███ ███    ███ ▀▀███▀▀▀▀▀  
+███    █▄  ███    ███ ███   ███ ███    ███ ███    ███ ▀███████████
+███    ███ ███    ███ ███   ███ ███   ▄███ ███    ███   ███    ███
+████████▀   ▀██████▀   ▀█   █▀  ████████▀   ▀██████▀    ███    ███
+                                                        ███    ███`;
+
+  startScreenUI.title = this.add.text(400, 220, asciiArt, {
+    fontSize: '14px',
+    fontFamily: 'Courier New, monospace',
+    color: '#ffffff',
+    stroke: '#ffffff',
+    strokeThickness: 2,
+    align: 'left'
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
 
-  // Wave UI
-  waveText = this.add.text(20, 20, 'Wave: 0', {
-    fontSize: '18px',
+  startScreenUI.instruction = this.add.text(400, 380, 'Press any button to start', {
+    fontSize: '24px',
     fontFamily: 'Arial',
-    color: '#ffffff',
+    color: '#ffff00',
     stroke: '#000000',
-    strokeThickness: 3
-  }).setDepth(DEPTH_LAYERS.UI);
-
-  const controlsText = this.add.text(400, 570, 'Press any key to start music | Arrows: Move | SPACE+Dir: Barrel Roll | D: Debug', {
-    fontSize: '12px',
-    fontFamily: 'Arial',
-    color: '#000000',
-    backgroundColor: '#ffffff',
-    padding: { x: 5, y: 2 }
+    strokeThickness: 4
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
 
   // Make main camera ignore UI elements
-  mainCamera.ignore([titleText, waveText, controlsText, debugUI.container]);
+  mainCamera.ignore([scoreText, gameOverText, startScreenUI.title, startScreenUI.instruction, debugUI.container]);
 }
 
 function createDebugUI(scene, mainCamera) {
@@ -1296,10 +1384,53 @@ function update(time, delta) {
   const scene = this;
   const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
 
+  // Toggle debug UI
   if (Phaser.Input.Keyboard.JustDown(debugKey)) {
     debugVisible = !debugVisible;
     debugUI.container.setVisible(debugVisible);
   }
+
+  // Handle start screen state
+  if (isStartScreen) {
+    // Keep terrain animating
+    CONFIG.camera.worldZ += CONFIG.obstacles.velocity * deltaFrames;
+    renderHeightmap(terrainGraphics, CONFIG.camera);
+
+    // Detect any input to start game
+    const anyKeyPressed = scene.input.keyboard.checkDown(scene.input.keyboard.addKey(''), 1);
+    const arrowPressed = cursors.left.isDown || cursors.right.isDown || cursors.up.isDown || cursors.down.isDown;
+    const mouseClicked = scene.input.activePointer.isDown;
+
+    if (Phaser.Input.Keyboard.JustDown(spaceKey) || arrowPressed || mouseClicked ||
+        scene.input.keyboard.keys && Object.values(scene.input.keyboard.keys).some(key => Phaser.Input.Keyboard.JustDown(key))) {
+      startGame();
+    }
+
+    // Don't update game logic in start screen
+    return;
+  }
+
+  // Handle game over state
+  if (gameOver) {
+    // Increment game over timer
+    gameOverTimer += delta;
+
+    // After 10 seconds, return to start screen
+    if (gameOverTimer >= 10000) {
+      returnToStartScreen();
+      return;
+    }
+
+    // Check for restart input
+    if (Phaser.Input.Keyboard.JustDown(spaceKey)) {
+      restartGame();
+    }
+    // Don't update game logic when game is over
+    return;
+  }
+
+  // Increment score (10 points per second at 60fps)
+  score += delta / 100;
 
   updateCondor(delta);
   updateDynamicPerspective();
@@ -1469,27 +1600,23 @@ function update(time, delta) {
 
   // Check for collisions
   const collision = checkCollisions();
-  if (collision) {
-    console.log(`COLLISION! Wave ${collision.waveId}, Rail ${collision.railId}`);
+  if (collision && !gameOver) {
+    console.log(`GAME OVER! Score: ${Math.floor(score)}`);
+
+    // Activate game over state
+    gameOver = true;
 
     // Visual feedback
     condor.setTint(0xFF0000);
-    scene.time.delayedCall(200, () => {
-      condor.clearTint();
-    });
+    condor.setAlpha(0.5);
 
-    // Remove the obstacle
-    collision.sprite.destroy();
-    const index = waveSystem.activeObstacles.indexOf(collision);
-    if (index > -1) {
-      waveSystem.activeObstacles.splice(index, 1);
-    }
-
-    // TODO: Decrease lives, game over, etc.
+    // Show game over message
+    gameOverText.setText(`GAME OVER\nScore: ${Math.floor(score)}\n\nPress SPACE to restart`);
+    gameOverText.setVisible(true);
   }
 
   // Update UI text
-  waveText.setText(`Wave: ${waveSystem.currentWave}`);
+  scoreText.setText(`Score: ${Math.floor(score)}`);
 
   if (debugVisible) {
     updateSliders(scene);
@@ -1500,7 +1627,7 @@ function update(time, delta) {
 
     debugUI.status.setText([
       `FPS: ${fps}`,
-      `Wave: ${waveSystem.currentWave}`,
+      `Score: ${Math.floor(score)}`,
       `Active: ${waveSystem.activeObstacles.length}`,
       `Next: ${WAVE_CONFIG.waveInterval - waveSystem.frameCounter}f`,
       `Closest Z: ${Math.round(closestZ)}`,
