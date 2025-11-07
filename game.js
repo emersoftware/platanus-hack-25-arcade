@@ -183,6 +183,13 @@ let condorHitboxIndicator;
 let debugRailsGraphics = null;
 let uiCameraRef = null;
 
+// Audio system
+let audioCtx = null;
+let masterGain = null;
+let musicBeat = 0;
+let musicBPM = 174; // Classic jungle tempo
+let beatInterval = (60 / musicBPM) * 1000 / 4; // 16th notes in ms
+
 // Dash / Barrel Roll state
 let isDashing = false;
 let dashProgress = 0;
@@ -683,8 +690,206 @@ function drawRailsDebug(scene) {
   updateDebugRailsGraphics();
 }
 
+// Audio generation functions
+function playKick(time) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
+
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(150, time);
+  osc.frequency.exponentialRampToValueAtTime(50, time + 0.05);
+
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(200, time);
+
+  gain.gain.setValueAtTime(0.8, time);
+  gain.gain.exponentialRampToValueAtTime(0.01, time + 0.3);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+
+  osc.start(time);
+  osc.stop(time + 0.3);
+}
+
+function playSnare(time, accent = 1) {
+  const noise = audioCtx.createBufferSource();
+  const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.1, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  noise.buffer = buffer;
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'highpass';
+  filter.frequency.setValueAtTime(1500, time);
+
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.3 * accent, time);
+  gain.gain.exponentialRampToValueAtTime(0.01, time + 0.1);
+
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+
+  noise.start(time);
+  noise.stop(time + 0.1);
+}
+
+function playHiHat(time, accent = 0.15) {
+  const noise = audioCtx.createBufferSource();
+  const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.03, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  noise.buffer = buffer;
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'highpass';
+  filter.frequency.setValueAtTime(7000, time);
+
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(accent, time);
+  gain.gain.exponentialRampToValueAtTime(0.01, time + 0.03);
+
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+
+  noise.start(time);
+  noise.stop(time + 0.03);
+}
+
+function playBass(time, note = 0) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
+
+  const baseFreq = 65.41; // C2
+  const freq = baseFreq * Math.pow(2, note / 12);
+
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(freq, time);
+
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(400, time);
+  filter.Q.setValueAtTime(5, time);
+
+  gain.gain.setValueAtTime(0.25, time);
+  gain.gain.setValueAtTime(0.25, time + 0.15);
+  gain.gain.exponentialRampToValueAtTime(0.01, time + 0.2);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+
+  osc.start(time);
+  osc.stop(time + 0.2);
+}
+
+// Jungle breakbeat pattern (Amen break inspired)
+function scheduleBreak(startTime) {
+  const sixteenth = beatInterval / 1000;
+
+  // Classic Amen-style pattern over 2 bars (32 sixteenth notes)
+  const pattern = [
+    // "Boom - - Bap"
+    { t: 0, k: 1, h: 0.2 },        // 1 - KICK (boom)
+    { t: 1, h: 0.05 },             // 2 - soft hat
+    { t: 2, h: 0.1, k: 1 },              // 3 - hat
+    { t: 3, h: 0.05 },             // 4 - soft hat
+    { t: 4, s: 1 },                // 5 - SNARE (bap)
+    { t: 5, h: 0.05 },             // 6 - soft hat
+    { t: 6, s: 0.3 },              // 7 - ghost snare
+    { t: 7, h: 0.1 },              // 8 - hat
+    
+    // "Ba-boom Bap"  
+    { t: 8, k: 0.7, h: 0.1 },      // 9 - soft kick + hat
+    { t: 9, k: 1 },                // 10 - KICK (boom)
+    { t: 10, h: 0.1 },             // 11 - hat
+    { t: 11, s: 0.4 },             // 12 - ghost snare
+    { t: 12, s: 1, h: 0.2 },       // 13 - SNARE (bap) + ride
+    { t: 13, h: 0.05 },            // 14 - soft hat
+    { t: 14, h: 0.1 },             // 15 - hat
+    { t: 15, s: 0.5 }              // 16 - closing snare
+  ];
+
+  pattern.forEach(hit => {
+    const time = startTime + (hit.t * sixteenth);
+    if (hit.k) playKick(time);
+    if (hit.s) playSnare(time, hit.s);
+    if (hit.h) playHiHat(time, hit.h);
+  });
+}
+
+// Bassline pattern
+function scheduleBass(startTime) {
+  const sixteenth = beatInterval / 1000;
+  const bassPattern = [
+    {t:0, n:0}, {t:4, n:7}, {t:8, n:0}, {t:12, n:5},
+    {t:16, n:0}, {t:20, n:3}, {t:24, n:0}, {t:28, n:10}
+  ];
+
+  // bassPattern.forEach(note => {
+  //   playBass(startTime + (note.t * sixteenth), note.n);
+  // });
+}
+
+// Main music loop
+function startMusic() {
+  const scheduleAhead = 0.5; // Schedule 500ms ahead
+  let lastScheduleTime = audioCtx.currentTime;
+
+  setInterval(() => {
+    const currentTime = audioCtx.currentTime;
+
+    while (lastScheduleTime < currentTime + scheduleAhead) {
+      scheduleBreak(lastScheduleTime);
+      scheduleBass(lastScheduleTime);
+      lastScheduleTime += (16 * beatInterval) / 1000; // 2 bars
+    }
+  }, 100);
+}
+
 function create() {
   const scene = this;
+
+  // Initialize audio system
+  if (!audioCtx) {
+    audioCtx = this.sound.context;
+    masterGain = audioCtx.createGain();
+    masterGain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+    masterGain.connect(audioCtx.destination);
+
+    // Flag to ensure music only starts once
+    let musicStarted = false;
+
+    // Function to start music (only once)
+    const initMusic = () => {
+      if (musicStarted) return; // Prevent multiple starts
+      musicStarted = true;
+      
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+          startMusic();
+          console.log('Jungle beats started! 🎵');
+        });
+      } else {
+        startMusic();
+        console.log('Jungle beats started! 🎵');
+      }
+    };
+
+    // Start music on first user interaction (mouse OR keyboard)
+    this.input.once('pointerdown', initMusic);
+    
+    // Also start on keyboard press - but use the same function
+    this.input.keyboard.once('keydown', initMusic);
+  }
 
   // Store initial farGrid centerY as the base for dynamic perspective
   baseFarGridCenterY = PERSPECTIVE_SYSTEM.farGrid.centerY;
@@ -811,8 +1016,8 @@ function create() {
     strokeThickness: 3
   }).setDepth(DEPTH_LAYERS.UI);
 
-  const controlsText = this.add.text(400, 570, 'Arrows: Move | SPACE+Dir: Barrel Roll | D: Debug', {
-    fontSize: '14px',
+  const controlsText = this.add.text(400, 570, 'Press any key to start music | Arrows: Move | SPACE+Dir: Barrel Roll | D: Debug', {
+    fontSize: '12px',
     fontFamily: 'Arial',
     color: '#000000',
     backgroundColor: '#ffffff',
