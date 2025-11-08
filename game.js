@@ -204,6 +204,8 @@ let dashStartY = 0;
 let dashTargetX = 0;
 let dashTargetY = 0;
 let dashRotation = 0;
+let spaceKeyPressTime = 0;
+let spaceKeyBufferWindow = 150; // ms for input buffer
 
 // Heightmap generation (simplified Perlin-like noise)
 function noise2D(x, z) {
@@ -1291,9 +1293,13 @@ function startDash(dirX, dirY) {
   dashStartX = condor.x;
   dashStartY = condor.y;
 
-  // Calculate target position (double of a cell = 200px)
-  dashTargetX = condor.x + dirX * CONFIG.condor.dashDistance;
-  dashTargetY = condor.y + dirY * CONFIG.condor.dashDistance;
+  // Variable distance: diagonal (2 directions) = 100px, single = 200px
+  const isDiagonal = dirX !== 0 && dirY !== 0;
+  const distance = isDiagonal ? 100 : CONFIG.condor.dashDistance;
+
+  // Calculate target position
+  dashTargetX = condor.x + dirX * distance;
+  dashTargetY = condor.y + dirY * distance;
 
   // Clamp to limits
   dashTargetX = Phaser.Math.Clamp(dashTargetX, CONFIG.limits.minX, CONFIG.limits.maxX);
@@ -1316,10 +1322,20 @@ function updateDash(delta) {
   condor.x = dashStartX + (dashTargetX - dashStartX) * easedT;
   condor.y = dashStartY + (dashTargetY - dashStartY) * easedT;
 
-  // Barrel roll rotation for horizontal movement
-  if (dashDirection.x !== 0) {
-    dashRotation = easedT * Math.PI * 2; // 360 degrees
+  // Determine movement type
+  const hasHorizontal = dashDirection.x !== 0;
+  const hasVertical = dashDirection.y !== 0;
+
+  if (hasHorizontal) {
+    // HORIZONTAL or DIAGONAL: Rotate with frame 2
+    const rotationDirection = dashDirection.x; // -1 or 1
+    dashRotation = rotationDirection * easedT * Math.PI * 2;
     condor.rotation = dashRotation;
+    condor.setFrame(2); // Frame 3
+  } else if (hasVertical) {
+    // VERTICAL ONLY: No rotation, freeze frame 0
+    condor.rotation = 0;
+    condor.setFrame(0); // Frame 1 (frozen)
   }
 
   // End dash
@@ -1328,26 +1344,44 @@ function updateDash(delta) {
     dashProgress = 0;
     condor.rotation = 0;
     dashRotation = 0;
+    // Return to normal animation
+    condor.play('condor_fly');
   }
 }
 
 function updateCondor(delta) {
   const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
 
-  // Check for dash input (SPACE + direction)
+  // Register SPACE key press for input buffer
   if (Phaser.Input.Keyboard.JustDown(spaceKey) && !isDashing) {
+    spaceKeyPressTime = Date.now();
+  }
+
+  // Check for dash input (SPACE + direction with buffer)
+  const timeSinceSpace = Date.now() - spaceKeyPressTime;
+  const withinBuffer = timeSinceSpace < spaceKeyBufferWindow && timeSinceSpace > 0;
+
+  if (withinBuffer && !isDashing) {
     let dirX = 0;
     let dirY = 0;
 
-    if (cursors.left.isDown) dirX = -1;
-    else if (cursors.right.isDown) dirX = 1;
+    // Capture BOTH directions independently (allows diagonals)
+    if (cursors.left.isDown || Phaser.Input.Keyboard.JustDown(cursors.left)) {
+      dirX = -1;
+    } else if (cursors.right.isDown || Phaser.Input.Keyboard.JustDown(cursors.right)) {
+      dirX = 1;
+    }
 
-    if (cursors.up.isDown) dirY = -1;
-    else if (cursors.down.isDown) dirY = 1;
+    if (cursors.up.isDown || Phaser.Input.Keyboard.JustDown(cursors.up)) {
+      dirY = -1;
+    } else if (cursors.down.isDown || Phaser.Input.Keyboard.JustDown(cursors.down)) {
+      dirY = 1;
+    }
 
-    // Start dash if a direction is pressed
+    // Start dash if direction detected
     if (dirX !== 0 || dirY !== 0) {
       startDash(dirX, dirY);
+      spaceKeyPressTime = 0; // Reset buffer
     }
   }
 
