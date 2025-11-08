@@ -68,7 +68,7 @@ let CONFIG = {
   },
   obstacles: {
     velocity: 5,
-    minSpeedMultiplier: 0.5,
+    minSpeedMultiplier: 1.0,
     maxSpeedMultiplier: 3.0
   },
   render: {
@@ -133,8 +133,8 @@ const PERSPECTIVE_SYSTEM = {
 const WAVE_CONFIG = {
   spawnZ: 1200,           // Distance where obstacles appear
   arrivalZ: 100,          // Distance where they reach player
-  waveInterval: 180,      // Frames between waves (3 seconds @ 60fps)
-  obstaclesPerWave: 8     // Number of obstacles per wave
+  waveInterval: 100,      // Frames between waves (~1.67 seconds @ 60fps)
+  obstaclesPerWave: 13    // Number of obstacles per wave
 };
 
 // Wave system state
