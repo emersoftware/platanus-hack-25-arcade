@@ -899,7 +899,7 @@ function startGame() {
   waveSystem.activeObstacles.push(...firstWave);
 
   // Update score
-  scoreText.setText('Score: 0');
+  scoreText.setText(formatScoreFullwidth(0));
 }
 
 // Return to start screen (from game over)
@@ -941,6 +941,16 @@ function restartGame() {
   gameOverTimer = 0;
   gameOverText.setVisible(false);
   startGame();
+}
+
+// Format score to fullwidth Unicode numbers with 9-digit padding
+function formatScoreFullwidth(score) {
+  const paddedScore = Math.floor(score).toString().padStart(9, '0');
+  const fullwidthMap = {
+    '0': '０', '1': '１', '2': '２', '3': '３', '4': '４',
+    '5': '５', '6': '６', '7': '７', '8': '８', '9': '９'
+  };
+  return paddedScore.split('').map(d => fullwidthMap[d]).join('');
 }
 
 function create() {
@@ -1065,35 +1075,35 @@ function create() {
   createDebugUI(this, mainCamera);
 
   // Score UI (hidden initially - only shown when game starts)
-  scoreText = this.add.text(20, 20, 'Score: 0', {
+  scoreText = this.add.text(20, 20, '０００００００００', {
     fontSize: '24px',
-    fontFamily: 'Arial',
+    fontFamily: 'Courier New, monospace',
     color: '#ffffff',
-    stroke: '#000000',
-    strokeThickness: 4
+    stroke: '#ffffff',
+    center: true,
+    strokeThickness: 0
   }).setDepth(DEPTH_LAYERS.UI).setVisible(false);
 
   // Game Over UI (hidden initially)
   gameOverText = this.add.text(400, 300, '', {
-    fontSize: '48px',
-    fontFamily: 'Arial',
+    fontSize: '20px',
+    fontFamily: 'Courier New, monospace',
     color: '#ff0000',
-    stroke: '#000000',
-    strokeThickness: 6,
+    stroke: '#ff0000',
+    strokeThickness: 0,
     align: 'center'
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI).setVisible(false);
 
   // Start Screen UI
   const asciiArt = `
- ▄████████  ▄██████▄  ███▄▄▄▄   ████████▄   ▄██████▄     ▄████████
+ ▄████████  ▄██████▄  ███▄▄▄▄   ████████▄   ▄██████▄  ▀███████████
 ███    ███ ███    ███ ███▀▀▀██▄ ███   ▀███ ███    ███   ███    ███
 ███    █▀  ███    ███ ███   ███ ███    ███ ███    ███   ███    ███
 ███        ███    ███ ███   ███ ███    ███ ███    ███  ▄███▄▄▄▄██▀
-███        ███    ███ ███   ███ ███    ███ ███    ███ ▀▀███▀▀▀▀▀  
-███    █▄  ███    ███ ███   ███ ███    ███ ███    ███ ▀███████████
+███        ███    ███ ███   ███ ███    ███ ███    ███ ▀███████████
+███    █▄  ███    ███ ███   ███ ███    ███ ███    ███   ███    ███
 ███    ███ ███    ███ ███   ███ ███   ▄███ ███    ███   ███    ███
-████████▀   ▀██████▀   ▀█   █▀  ████████▀   ▀██████▀    ███    ███
-                                                        ███    ███`;
+████████▀   ▀██████▀  ███   ███ ████████▀   ▀██████▀    ███    ███`;
 
   startScreenUI.title = this.add.text(400, 220, asciiArt, {
     fontSize: '14px',
@@ -1611,12 +1621,20 @@ function update(time, delta) {
     condor.setAlpha(0.5);
 
     // Show game over message
-    gameOverText.setText(`GAME OVER\nScore: ${Math.floor(score)}\n\nPress SPACE to restart`);
+    const gameOverAscii = `
+█▀▀ █▀█ █▄█ █▀▀   █▀█ █ █ █▀▀ █▀▄
+█ █ █▀█ █ █ █▀▀   █ █ ▀▄▀ █▀▀ █▀▄
+▀▀▀ ▀ ▀ ▀ ▀ ▀▀▀   ▀▀▀  ▀  ▀▀▀ ▀ ▀
+
+${formatScoreFullwidth(score)}
+
+Press SPACE to restart`;
+    gameOverText.setText(gameOverAscii);
     gameOverText.setVisible(true);
   }
 
   // Update UI text
-  scoreText.setText(`Score: ${Math.floor(score)}`);
+  scoreText.setText(formatScoreFullwidth(score));
 
   if (debugVisible) {
     updateSliders(scene);
