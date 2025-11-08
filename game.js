@@ -12,7 +12,7 @@ const config = {
   type: Phaser.AUTO,
   width: 800,
   height: 600,
-  backgroundColor: '#87CEEB',
+  backgroundColor: '#648CBE',
   physics: {
     default: 'arcade',
     arcade: { debug: false }
@@ -144,13 +144,13 @@ let waveSystem = {
   activeObstacles: []
 };
 
-// Terrain colors by height
+// Terrain colors by height (blue theme)
 const TERRAIN_COLORS = [
-  { h: 120, c: 0xFFFFFF },
-  { h: 90, c: 0xC0C0C0 },
-  { h: 60, c: 0xA0826D },
-  { h: 30, c: 0x8B7355 },
-  { h: 0, c: 0x5D4E37 },
+  { h: 120, c: 0xE0F0FF },  // Very light blue (snow/ice)
+  { h: 90, c: 0xA8C8E0 },   // Light blue-gray
+  { h: 60, c: 0x7095B8 },   // Medium blue
+  { h: 30, c: 0x4A6F90 },   // Deep blue
+  { h: 0, c: 0x2A4560 },    // Dark blue (deep water)
 ];
 
 // 2x2 Bayer matrix for ordered dithering (lighter)
@@ -307,12 +307,46 @@ function renderHeightmap(gfx, camera) {
   const horizon = CONFIG.heightmap.horizon;
   const step = 2;
 
-  // Sky/fog color
-  const skyR = 135, skyG = 206, skyB = 235;
+  // Blue gradient colors
+  const sunsetColors = [
+    { pos: 0, r: 100, g: 140, b: 190 },    // Deep blue at top
+    { pos: 0.3, r: 135, g: 170, b: 210 },  // Medium blue
+    { pos: 0.5, r: 165, g: 195, b: 225 },  // Light blue
+    { pos: 0.7, r: 190, g: 215, b: 235 },  // Pale blue
+    { pos: 0.85, r: 210, g: 230, b: 245 }, // Very pale blue
+    { pos: 1, r: 225, g: 240, b: 250 }     // Almost white blue at horizon
+  ];
 
-  // Fill entire screen with sky color to ensure background always covers viewport
-  gfx.fillStyle(0x87CEEB);
-  gfx.fillRect(0, 0, w, h);
+  // Draw sunset gradient background
+  const gradientSteps = 60;
+  for (let i = 0; i < gradientSteps; i++) {
+    const y = (h / gradientSteps) * i;
+    const nextY = (h / gradientSteps) * (i + 1);
+    const t = i / (gradientSteps - 1);
+
+    // Find the two colors to interpolate between
+    let colorA = sunsetColors[0];
+    let colorB = sunsetColors[1];
+    for (let j = 0; j < sunsetColors.length - 1; j++) {
+      if (t >= sunsetColors[j].pos && t <= sunsetColors[j + 1].pos) {
+        colorA = sunsetColors[j];
+        colorB = sunsetColors[j + 1];
+        break;
+      }
+    }
+
+    // Interpolate between colors
+    const localT = (t - colorA.pos) / (colorB.pos - colorA.pos);
+    const r = Math.floor(colorA.r + (colorB.r - colorA.r) * localT);
+    const g = Math.floor(colorA.g + (colorB.g - colorA.g) * localT);
+    const b = Math.floor(colorA.b + (colorB.b - colorA.b) * localT);
+
+    gfx.fillStyle((r << 16) | (g << 8) | b);
+    gfx.fillRect(0, y, w, nextY - y);
+  }
+
+  // Fog color matches horizon color for seamless blend
+  const skyR = 225, skyG = 240, skyB = 250;
 
   // Classic voxel space rendering - simple and direct
   for (let screenX = 0; screenX < w; screenX += step) {
@@ -1090,8 +1124,8 @@ function create() {
   gameOverText = this.add.text(400, 300, '', {
     fontSize: '20px',
     fontFamily: 'Courier New, monospace',
-    color: '#ff0000',
-    stroke: '#ff0000',
+    color: '#ffffff',
+    stroke: '#ffffff',
     strokeThickness: 0,
     align: 'center'
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI).setVisible(false);
