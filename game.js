@@ -174,6 +174,7 @@ let debugVisible = false;
 let debugUI = {};
 let sliders = [];
 let scoreText;
+let scoreBackground;
 let gameOverText;
 let condorCellIndicator;
 let condorHitboxIndicator;
@@ -948,6 +949,7 @@ function returnToStartScreen() {
 
   // Hide game over UI
   gameOverText.setVisible(false);
+  scoreBackground.setVisible(false);
   scoreText.setVisible(false);
 
   // Show start screen UI
@@ -976,6 +978,7 @@ function returnToStartScreen() {
 function restartGame() {
   gameOverTimer = 0;
   gameOverText.setVisible(false);
+  scoreBackground.setVisible(false);
   startGame();
 }
 
@@ -1110,6 +1113,12 @@ function create() {
 
   createDebugUI(this, mainCamera);
 
+  // Semi-transparent red background for score (covers entire screen)
+  scoreBackground = this.add.graphics();
+  scoreBackground.fillStyle(0xFF0000, 0.75);  // Red with 75% transparency
+  scoreBackground.fillRect(0, 0, 800, 600);  // Cover entire screen
+  scoreBackground.setDepth(DEPTH_LAYERS.UI - 1).setVisible(false);  // Behind score text, hidden initially
+
   // Score UI (hidden initially - only shown when game starts)
   scoreText = this.add.text(20, 20, '０００００００００', {
     fontSize: '24px',
@@ -1159,7 +1168,7 @@ function create() {
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
 
   // Make main camera ignore UI elements
-  mainCamera.ignore([scoreText, gameOverText, startScreenUI.title, startScreenUI.instruction, debugUI.container]);
+  mainCamera.ignore([scoreText, scoreBackground, gameOverText, startScreenUI.title, startScreenUI.instruction, debugUI.container]);
 }
 
 function createDebugUI(scene, mainCamera) {
@@ -1699,6 +1708,7 @@ ${formatScoreFullwidth(score)}
 Press SPACE to restart`;
     gameOverText.setText(gameOverAscii);
     gameOverText.setVisible(true);
+    scoreBackground.setVisible(true);
   }
 
   // Update UI text
