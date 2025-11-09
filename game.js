@@ -141,7 +141,8 @@ const WAVE_CONFIG = {
 let waveSystem = {
   currentWave: 0,
   frameCounter: 0,
-  activeObstacles: []
+  activeObstacles: [],
+  nextWavePattern: null  // Stores the pattern for next wave preview
 };
 
 // Terrain colors by height (blue theme)
@@ -178,6 +179,7 @@ let scoreBackground;
 let gameOverText;
 let condorCellIndicator;
 let condorHitboxIndicator;
+let nextWavePreview;
 let debugRailsGraphics = null;
 let uiCameraRef = null;
 
@@ -644,8 +646,8 @@ function generateWavePattern(waveNumber) {
 }
 
 // Create wave
-function spawnWave(scene, waveNumber) {
-  const pattern = generateWavePattern(waveNumber);
+function spawnWave(scene, waveNumber, preGeneratedPattern = null) {
+  const pattern = preGeneratedPattern || generateWavePattern(waveNumber);
   const newObstacles = [];
 
   pattern.forEach(data => {
@@ -709,6 +711,35 @@ function updateDebugRailsGraphics() {
     debugRailsGraphics.lineBetween(rail.far.topRight.x, rail.far.topRight.y, rail.near.topRight.x, rail.near.topRight.y);
     debugRailsGraphics.lineBetween(rail.far.bottomLeft.x, rail.far.bottomLeft.y, rail.near.bottomLeft.x, rail.near.bottomLeft.y);
     debugRailsGraphics.lineBetween(rail.far.bottomRight.x, rail.far.bottomRight.y, rail.near.bottomRight.x, rail.near.bottomRight.y);
+  });
+}
+
+// Update preview of next wave in far grid
+function updateNextWavePreview(previewGraphics, nextPattern) {
+  if (!previewGraphics || !nextPattern) return;
+  previewGraphics.clear();
+
+  nextPattern.forEach(data => {
+    const rail = RAILS.find(r => r.id === data.laneId);
+    if (!rail) return;
+
+    previewGraphics.fillStyle(0xFF6666, 0.25);
+    // Light red, 25% opacity
+    previewGraphics.fillRect(
+      rail.far.topLeft.x,
+      rail.far.topLeft.y,
+      rail.far.topRight.x - rail.far.topLeft.x,
+      rail.far.bottomLeft.y - rail.far.topLeft.y
+    );
+
+    // Optional: Add a slightly darker border
+    previewGraphics.lineStyle(1, 0xFF0000, 0.3);
+    previewGraphics.strokeRect(
+      rail.far.topLeft.x,
+      rail.far.topLeft.y,
+      rail.far.topRight.x - rail.far.topLeft.x,
+      rail.far.bottomLeft.y - rail.far.topLeft.y
+    );
   });
 }
 
@@ -900,6 +931,7 @@ function startGame() {
   scoreText.setVisible(true);
   debugRailsGraphics.setVisible(true);
   condorCellIndicator.setVisible(true);
+  nextWavePreview.setVisible(true);
 
   // Initialize audio on first start
   if (audioCtx && audioCtx.state === 'suspended') {
@@ -930,10 +962,14 @@ function startGame() {
   // Reset wave system
   waveSystem.currentWave = 0;
   waveSystem.frameCounter = 0;
+  waveSystem.nextWavePattern = null;
 
   // Spawn first wave
   const firstWave = spawnWave(sceneRef, 0);
   waveSystem.activeObstacles.push(...firstWave);
+
+  // Generate pattern for wave 1 (next wave) for preview
+  waveSystem.nextWavePattern = generateWavePattern(1);
 
   // Update score
   scoreText.setText(formatScoreFullwidth(0));
@@ -965,6 +1001,8 @@ function returnToStartScreen() {
   debugRailsGraphics.setVisible(false);
   condorCellIndicator.clear();
   condorCellIndicator.setVisible(false);
+  nextWavePreview.clear();
+  nextWavePreview.setVisible(false);
 
   // Reset condor visual
   condor.x = 400;
@@ -1079,6 +1117,11 @@ function create() {
   condorCellIndicator.setDepth(DEPTH_LAYERS.CELL_INDICATOR);
   condorCellIndicator.setVisible(false);
 
+  // Preview indicator for next wave cells
+  nextWavePreview = this.add.graphics();
+  nextWavePreview.setDepth(DEPTH_LAYERS.DEBUG_RAILS - 10); // Behind debug rails
+  nextWavePreview.setVisible(false); // Hidden in start screen
+
   // Visual indicator for condor's hitbox (collision area)
   condorHitboxIndicator = this.add.graphics();
   condorHitboxIndicator.setDepth(DEPTH_LAYERS.UI - 1); // Dibuja encima del condor
@@ -1094,7 +1137,7 @@ function create() {
   uiCameraRef = uiCamera; // Store reference for other functions
 
   // Make UI camera ignore game objects
-  uiCamera.ignore([terrainGraphics, condor, condorCellIndicator, condorHitboxIndicator]);
+  uiCamera.ignore([terrainGraphics, condor, condorCellIndicator, condorHitboxIndicator, nextWavePreview]);
 
   // Initialize new wave system
   waveSystem.activeObstacles = [];
@@ -1323,6 +1366,7 @@ function updateDynamicPerspective() {
 
   updateRailsFarPositions();
   updateDebugRailsGraphics();
+  updateNextWavePreview(nextWavePreview, waveSystem.nextWavePattern);
 }
 
 // Start dash/barrel roll
@@ -1627,8 +1671,14 @@ function update(time, delta) {
   if (waveSystem.frameCounter >= WAVE_CONFIG.waveInterval) {
     waveSystem.frameCounter = 0;
     waveSystem.currentWave++;
-    const newWave = spawnWave(scene, waveSystem.currentWave);
+
+    // Use pre-generated pattern or generate if first wave
+    const pattern = waveSystem.nextWavePattern || generateWavePattern(waveSystem.currentWave);
+    const newWave = spawnWave(scene, waveSystem.currentWave, pattern);
     waveSystem.activeObstacles.push(...newWave);
+
+    // Generate and store NEXT wave pattern for preview
+    waveSystem.nextWavePattern = generateWavePattern(waveSystem.currentWave + 1);
   }
 
   // Update active obstacles
