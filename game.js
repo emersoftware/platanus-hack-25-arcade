@@ -62,9 +62,9 @@ let CONFIG = {
   heightmap: {
     size: 512,
     maxHeight: 120,
-    renderDist: 300,
+    renderDist: 200,
     horizon: 350,
-    step: 2
+    step: 3
   },
   obstacles: {
     velocity: 5,
@@ -167,6 +167,7 @@ let baseFarGridCenterY = 160; // Store initial farGrid centerY
 let obstacles = [];
 let heightmapData = null;
 let terrainGraphics = null;
+let backgroundGradientCache = null;
 let condor;
 let cursors;
 let spaceKey;
@@ -308,102 +309,80 @@ function renderHeightmap(gfx, camera) {
   gfx.clear();
   const w = CONFIG.width, h = CONFIG.height;
   const horizon = CONFIG.heightmap.horizon;
-  const step = 2;
+  const step = CONFIG.heightmap.step;
+  const renderDist = CONFIG.heightmap.renderDist;
 
-  // Blue gradient colors
-  const sunsetColors = [
-    { pos: 0, r: 100, g: 140, b: 190 },    // Deep blue at top
-    { pos: 0.3, r: 135, g: 170, b: 210 },  // Medium blue
-    { pos: 0.5, r: 165, g: 195, b: 225 },  // Light blue
-    { pos: 0.7, r: 190, g: 215, b: 235 },  // Pale blue
-    { pos: 0.85, r: 210, g: 230, b: 245 }, // Very pale blue
-    { pos: 1, r: 225, g: 240, b: 250 }     // Almost white blue at horizon
-  ];
-
-  // Draw sunset gradient background
-  const gradientSteps = 60;
-  for (let i = 0; i < gradientSteps; i++) {
-    const y = (h / gradientSteps) * i;
-    const nextY = (h / gradientSteps) * (i + 1);
-    const t = i / (gradientSteps - 1);
-
-    // Find the two colors to interpolate between
-    let colorA = sunsetColors[0];
-    let colorB = sunsetColors[1];
-    for (let j = 0; j < sunsetColors.length - 1; j++) {
-      if (t >= sunsetColors[j].pos && t <= sunsetColors[j + 1].pos) {
-        colorA = sunsetColors[j];
-        colorB = sunsetColors[j + 1];
-        break;
+  // Draw cached gradient background (only once at startup)
+  if (!backgroundGradientCache) {
+    backgroundGradientCache = [];
+    const sunsetColors = [
+      { pos: 0, r: 100, g: 140, b: 190 },
+      { pos: 0.3, r: 135, g: 170, b: 210 },
+      { pos: 0.5, r: 165, g: 195, b: 225 },
+      { pos: 0.7, r: 190, g: 215, b: 235 },
+      { pos: 0.85, r: 210, g: 230, b: 245 },
+      { pos: 1, r: 225, g: 240, b: 250 }
+    ];
+    const gradientSteps = 30;
+    for (let i = 0; i < gradientSteps; i++) {
+      const y = (h / gradientSteps) * i;
+      const nextY = (h / gradientSteps) * (i + 1);
+      const t = i / (gradientSteps - 1);
+      let colorA = sunsetColors[0];
+      let colorB = sunsetColors[1];
+      for (let j = 0; j < sunsetColors.length - 1; j++) {
+        if (t >= sunsetColors[j].pos && t <= sunsetColors[j + 1].pos) {
+          colorA = sunsetColors[j];
+          colorB = sunsetColors[j + 1];
+          break;
+        }
       }
+      const localT = (t - colorA.pos) / (colorB.pos - colorA.pos);
+      const r = Math.floor(colorA.r + (colorB.r - colorA.r) * localT);
+      const g = Math.floor(colorA.g + (colorB.g - colorA.g) * localT);
+      const b = Math.floor(colorA.b + (colorB.b - colorA.b) * localT);
+      backgroundGradientCache.push({ y, nextY, color: (r << 16) | (g << 8) | b });
     }
-
-    // Interpolate between colors
-    const localT = (t - colorA.pos) / (colorB.pos - colorA.pos);
-    const r = Math.floor(colorA.r + (colorB.r - colorA.r) * localT);
-    const g = Math.floor(colorA.g + (colorB.g - colorA.g) * localT);
-    const b = Math.floor(colorA.b + (colorB.b - colorA.b) * localT);
-
-    gfx.fillStyle((r << 16) | (g << 8) | b);
-    gfx.fillRect(0, y, w, nextY - y);
   }
 
-  // Fog color matches horizon color for seamless blend
+  // Draw from cache
+  for (let i = 0; i < backgroundGradientCache.length; i++) {
+    const grad = backgroundGradientCache[i];
+    gfx.fillStyle(grad.color);
+    gfx.fillRect(0, grad.y, w, grad.nextY - grad.y);
+  }
+
   const skyR = 225, skyG = 240, skyB = 250;
+  const camX = camera.worldX, camZ = camera.worldZ, camH = camera.height;
+  const wHalf = w / 2;
 
-  // Classic voxel space rendering - simple and direct
+  // Voxel space rendering optimized with local vars
   for (let screenX = 0; screenX < w; screenX += step) {
-    // Y-buffer: track the highest point we've drawn to
-    let yBuffer = h; // Start from bottom of screen
+    let yBuffer = h;
+    const rayAngle = (screenX - wHalf) / w;
 
-    // Calculate ray direction for this column
-    const rayAngle = (screenX - w / 2) / w;
-
-    // Cast ray from near to far
-    for (let dist = 10; dist < CONFIG.heightmap.renderDist; dist += 2) {
-      // Sample terrain at this distance
-      const sampleX = camera.worldX + rayAngle * dist * 0.5;
-      const sampleZ = camera.worldZ + dist;
-
-      // Get height at this point
+    for (let dist = 10; dist < renderDist; dist += 2) {
+      const sampleX = camX + rayAngle * dist * 0.5;
+      const sampleZ = camZ + dist;
       const terrainHeight = getTerrainHeight(sampleX, sampleZ);
-
-      // Simple projection: when camera is ABOVE terrain
-      // The terrain should appear BELOW the horizon
-      const heightAboveTerrain = camera.height - terrainHeight;
-
-      // Project to screen (inverse of what was "working" when inverted)
-      // If it worked at top when formula was: horizon - (height * scale)
-      // Then for bottom it should be: horizon + (height * scale)
+      const heightAboveTerrain = camH - terrainHeight;
       const projectedY = horizon + (heightAboveTerrain * 300) / dist;
 
-      // Draw if this creates a visible column
       if (projectedY >= horizon && projectedY < yBuffer) {
         const screenY = Math.floor(projectedY);
-
-        // Only draw if we have something to draw
         if (yBuffer > screenY) {
-          // Get color with distance fog
           const baseColor = getTerrainColor(terrainHeight);
-          const fog = Math.pow(dist / CONFIG.heightmap.renderDist, 1.5);
-
+          const fog = Math.pow(dist / renderDist, 1.5);
           const r = Math.floor(((baseColor >> 16) & 0xFF) * (1 - fog) + skyR * fog);
           const g = Math.floor(((baseColor >> 8) & 0xFF) * (1 - fog) + skyG * fog);
           const b = Math.floor((baseColor & 0xFF) * (1 - fog) + skyB * fog);
-
           let finalColor = (r << 16) | (g << 8) | b;
-          // Apply dithering for retro effect
-          finalColor = applyDithering(finalColor, screenX, screenY, 16); // Adjust 16 for more/less dithering
-
+          finalColor = applyDithering(finalColor, screenX, screenY, 16);
           gfx.fillStyle(finalColor);
           gfx.fillRect(screenX, screenY, step, yBuffer - screenY);
-
-          // Update y-buffer
           yBuffer = screenY;
         }
       }
-
-      // Stop if we've filled to horizon
       if (yBuffer <= horizon) break;
     }
   }
