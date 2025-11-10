@@ -70,7 +70,7 @@ let CONFIG = {
   obstacles: {
     baseVelocity: 6.0,         // Starting velocity (slower)
     currentVelocity: 6.0,      // Will increase over time
-    targetVelocity: 11.0,      // Sweet spot - comfortable but challenging
+    targetVelocity: 11.5,      // Sweet spot - comfortable but challenging
     growthRate: 8,             // How fast it reaches target (lower = faster)
     minSpeedMultiplier: 1.0,
     maxSpeedMultiplier: 3.0
@@ -190,7 +190,11 @@ let waveSystem = {
   frameCounter: 0,
   activeObstacles: [],
   nextWavePattern: null,  // Stores the pattern for next wave preview
-  currentWaveInterval: 100  // Dynamic interval calculated based on velocity
+  currentWaveInterval: 100,  // Dynamic interval calculated based on velocity
+
+  // Matrix-based collision detection (5x5 grid = 25 cells)
+  arrivalMatrix: Array(25).fill(0),  // 0=safe, 1=obstacle
+  arrivalWaveId: null  // Track which wave is currently in arrival zone
 };
 
 // Terrain colors by height (blue theme)
@@ -610,6 +614,16 @@ function checkCollisions() {
   const condorCells = getCondorCells();
   if (!condorCells) return false; // Condor out of bounds
 
+  // FAST CHECK: Use matrix for O(1) cell lookup
+  const hasObstacleInCell = condorCells.some(cell =>
+    waveSystem.arrivalMatrix[cell.id] === 1
+  );
+
+  // Early exit if no obstacles in condor's cells
+  if (!hasObstacleInCell) {
+    return false; // No collision possible
+  }
+
   // Get condor HITBOX bounds (same as used for cell detection)
   const condorHitbox = {
     left: condor.x - CONFIG.condor.hitboxWidth / 2,
@@ -618,10 +632,12 @@ function checkCollisions() {
     bottom: condor.y + CONFIG.condor.hitboxHeight / 2
   };
 
-  // Check if any obstacle is in arrival zone and intersects with condor hitbox
+  // PRECISE CHECK: Only check obstacles that are in arrival zone and match the wave
   for (let obs of waveSystem.activeObstacles) {
-    // Obstacle is in arrival zone (near player)
-    if (obs.z < WAVE_CONFIG.arrivalZ + 50 && obs.z > WAVE_CONFIG.arrivalZ - 50) {
+    // Only check obstacles from the wave currently in arrival zone
+    if (obs.waveId === waveSystem.arrivalWaveId &&
+        obs.z <= WAVE_CONFIG.arrivalZ + 100 &&
+        obs.z >= WAVE_CONFIG.arrivalZ - 50) {
       // Check if obstacle is in any of the cells the condor occupies
       const obstacleInCondorCell = condorCells.some(cell => cell.id === obs.railId);
 
@@ -675,6 +691,15 @@ function generateWavePattern(waveNumber) {
   }
 
   return pattern;
+}
+
+// Build a matrix representation of a wave pattern for fast collision detection
+function buildMatrixFromPattern(pattern) {
+  const matrix = Array(25).fill(0);
+  pattern.forEach(obstacle => {
+    matrix[obstacle.laneId] = 1;  // Mark cell as having obstacle
+  });
+  return matrix;
 }
 
 // Create wave
@@ -1651,12 +1676,21 @@ function update(time, delta) {
   condorCellIndicator.clear();
 
   if (condorCells) {
+    // FAST matrix check instead of looping through all obstacles
+    const hasObstacleInCell = condorCells.some(cell =>
+      waveSystem.arrivalMatrix[cell.id] === 1
+    );
+
+    // Choose color based on obstacle presence
+    // Red (0xFF4444) when over obstacle, light mint green (0xAAFFAA) when safe
+    const indicatorColor = hasObstacleInCell ? 0xFF4444 : 0xAAFFAA;
+
     // Draw all rails the condor is currently in (from far to near)
     condorCells.forEach(cell => {
       const rail = cell.rail;
 
       // Draw connecting lines from far to near (4 corners)
-      condorCellIndicator.lineStyle(2, 0x00FFFF, 0.6);
+      condorCellIndicator.lineStyle(2, indicatorColor, 0.6);
 
       // Top-left corner line
       condorCellIndicator.lineBetween(
@@ -1683,7 +1717,7 @@ function update(time, delta) {
       );
 
       // Far quad border (recuadro)
-      condorCellIndicator.lineStyle(2, 0x00FFFF, 0.8);
+      condorCellIndicator.lineStyle(2, indicatorColor, 0.8);
       condorCellIndicator.strokeRect(
         rail.far.topLeft.x,
         rail.far.topLeft.y,
@@ -1692,13 +1726,43 @@ function update(time, delta) {
       );
 
       // Near quad border (thicker)
-      condorCellIndicator.lineStyle(3, 0x00FFFF, 0.8);
+      condorCellIndicator.lineStyle(3, indicatorColor, 0.8);
       condorCellIndicator.strokeRect(
         rail.near.topLeft.x,
         rail.near.topLeft.y,
         rail.near.topRight.x - rail.near.topLeft.x,
         rail.near.bottomLeft.y - rail.near.topLeft.y
       );
+    });
+  }
+
+  // DEBUG: Draw arrival matrix state as visual overlay
+  if (debugVisible && waveSystem.arrivalWaveId !== null) {
+    waveSystem.arrivalMatrix.forEach((hasObstacle, cellId) => {
+      if (hasObstacle === 1) {
+        const rail = RAILS[cellId];
+        if (rail && rail.near) {
+          // Draw semi-transparent red rectangle on cells with obstacles
+          condorCellIndicator.lineStyle(0);
+          condorCellIndicator.fillStyle(0xFF0000, 0.3); // Semi-transparent red
+          condorCellIndicator.fillRect(
+            rail.near.topLeft.x,
+            rail.near.topLeft.y,
+            rail.near.topRight.x - rail.near.topLeft.x,
+            rail.near.bottomLeft.y - rail.near.topLeft.y
+          );
+
+          // Also show grid coordinates
+          const col = cellId % 5;
+          const row = Math.floor(cellId / 5);
+          const centerX = (rail.near.topLeft.x + rail.near.topRight.x) / 2;
+          const centerY = (rail.near.topLeft.y + rail.near.bottomLeft.y) / 2;
+
+          // Draw text showing cell coordinates
+          condorCellIndicator.lineStyle(0);
+          condorCellIndicator.fillStyle(0xFFFFFF, 1);
+        }
+      }
     });
   }
 
@@ -1812,6 +1876,78 @@ function update(time, delta) {
       alpha = obs.z / CONFIG.render.fadeOutStart;
     }
     obs.sprite.setAlpha(Phaser.Math.Clamp(alpha, 0, 1));
+  }
+
+  // Update arrival matrix EVERY FRAME to track obstacle movement
+  // ZONA MUY AMPLIADA: z de -50 a 1200 = TODA la distancia desde spawn!
+  // El indicador se pone rojo DESDE QUE SE VEN los obstáculos
+  let waveInArrival = null;
+  for (let obs of waveSystem.activeObstacles) {
+    // Check if obstacle is in warning zone (covers ENTIRE distance from spawn to player)
+    if (obs.z <= WAVE_CONFIG.spawnZ && obs.z >= WAVE_CONFIG.arrivalZ - 50) {
+      waveInArrival = obs.waveId;
+      break;  // Found wave in warning zone
+    }
+  }
+
+  // Update arrival matrix EVERY FRAME (not just when wave changes)
+  waveSystem.arrivalWaveId = waveInArrival;
+
+  if (waveInArrival !== null) {
+    // Build matrix from obstacles of this wave that are currently in warning zone
+    waveSystem.arrivalMatrix.fill(0);
+    waveSystem.activeObstacles.forEach(obs => {
+      // Only add to matrix if obstacle is IN the warning zone right now
+      if (obs.waveId === waveInArrival &&
+          obs.z <= WAVE_CONFIG.spawnZ &&
+          obs.z >= WAVE_CONFIG.arrivalZ - 50) {
+        waveSystem.arrivalMatrix[obs.railId] = 1;
+      }
+    });
+  } else {
+    // No wave in warning zone - clear matrix
+    waveSystem.arrivalMatrix.fill(0);
+  }
+
+  // DEBUG: Always log when wave is in arrival zone
+  if (!gameOver && waveInArrival !== null && waveSystem.frameCounter % 60 === 0) {
+    const condorCells = getCondorCells();
+    const matrixOccupied = [];
+    const obstaclesInZone = [];
+
+    waveSystem.arrivalMatrix.forEach((val, idx) => {
+      if (val === 1) {
+        const col = idx % 5;
+        const row = Math.floor(idx / 5);
+        matrixOccupied.push(`${idx}:(${col},${row})`);
+      }
+    });
+
+    waveSystem.activeObstacles.forEach(obs => {
+      if (obs.waveId === waveInArrival &&
+          obs.z <= WAVE_CONFIG.spawnZ &&
+          obs.z >= WAVE_CONFIG.arrivalZ - 50) {
+        const col = obs.railId % 5;
+        const row = Math.floor(obs.railId / 5);
+        obstaclesInZone.push(`rail=${obs.railId}:(${col},${row}) z=${obs.z.toFixed(0)}`);
+      }
+    });
+
+    if (condorCells) {
+      const condorPositions = condorCells.map(c => {
+        const col = c.id % 5;
+        const row = Math.floor(c.id / 5);
+        return `${c.id}:(${col},${row})`;
+      });
+
+      console.log(`[Matrix Debug] Wave ${waveInArrival} in arrival zone`);
+      console.log(`  Condor at cells: ${condorPositions.join(', ')}`);
+      console.log(`  Matrix has obstacles at: ${matrixOccupied.length > 0 ? matrixOccupied.join(', ') : 'NONE'}`);
+      console.log(`  Actual obstacles in zone: ${obstaclesInZone.length > 0 ? obstaclesInZone.join(' | ') : 'NONE'}`);
+
+      const hasCollisionPotential = condorCells.some(cell => waveSystem.arrivalMatrix[cell.id] === 1);
+      console.log(`  Indicator should be: ${hasCollisionPotential ? 'RED ⚠️' : 'GREEN ✓'}`);
+    }
   }
 
   // Check for collisions
