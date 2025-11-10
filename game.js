@@ -157,6 +157,19 @@ function calculateVelocity(waveNumber) {
   return velocity;
 }
 
+// Calculate BPM based on current velocity (100 BPM → 170 BPM)
+function calculateBPM() {
+  const minBPM = 100;
+  const maxBPM = 170;
+  const minVel = CONFIG.obstacles.baseVelocity;      // 6.0
+  const maxVel = CONFIG.obstacles.targetVelocity;    // 11.5
+
+  // Linear interpolation: velocity → BPM
+  const progress = (CONFIG.obstacles.currentVelocity - minVel) / (maxVel - minVel);
+  const clampedProgress = Math.max(0, Math.min(1, progress)); // Clamp to [0, 1]
+  return minBPM + (maxBPM - minBPM) * clampedProgress;
+}
+
 // Calculate dynamic wave interval based on current velocity
 function calculateWaveInterval() {
   // Calculate average speed (considering acceleration)
@@ -249,7 +262,7 @@ let sceneRef = null;
 let audioCtx = null;
 let masterGain = null;
 let musicBeat = 0;
-let musicBPM = 174; // Classic jungle tempo
+let musicBPM = 100; // Dynamic BPM: starts at 100, goes up to 170
 let beatInterval = (60 / musicBPM) * 1000 / 4; // 16th notes in ms
 
 // Dash / Barrel Roll state
@@ -881,6 +894,34 @@ function playHiHat(time, accent = 0.15) {
   noise.stop(time + 0.03);
 }
 
+function playCrash(time) {
+  // Create metallic crash cymbal sound using filtered noise
+  const noise = audioCtx.createBufferSource();
+  const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.8, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  noise.buffer = buffer;
+
+  // Bandpass filter for metallic cymbal character
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(8000, time);
+  filter.Q.value = 0.5;
+
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.5, time);
+  gain.gain.exponentialRampToValueAtTime(0.01, time + 0.8);
+
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+
+  noise.start(time);
+  noise.stop(time + 0.8);
+}
+
 function playBass(time, note = 0) {
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -912,7 +953,7 @@ function playBass(time, note = 0) {
 function scheduleBreak(startTime) {
   const sixteenth = beatInterval / 1000;
 
-  // Classic Amen-style pattern over 2 bars (32 sixteenth notes)
+  // Classic Amen-style pattern 
   const pattern = [
     // "Boom - - Bap"
     { t: 0, k: 1, h: 0.2 },        // 1 - KICK (boom)
@@ -1024,6 +1065,10 @@ function startGame() {
   // Reset velocity to base (for progressive difficulty)
   CONFIG.obstacles.currentVelocity = CONFIG.obstacles.baseVelocity;
   waveSystem.currentWaveInterval = calculateWaveInterval();
+
+  // Reset BPM to initial (100 BPM)
+  musicBPM = 100;
+  beatInterval = (60 / musicBPM) * 1000 / 4;
 
   // Spawn first wave
   const firstWave = spawnWave(sceneRef, 0);
@@ -1809,6 +1854,10 @@ function update(time, delta) {
     // Update velocity using logarithmic growth curve
     CONFIG.obstacles.currentVelocity = calculateVelocity(waveSystem.currentWave);
 
+    // Update BPM based on new velocity (100 → 170 BPM)
+    musicBPM = calculateBPM();
+    beatInterval = (60 / musicBPM) * 1000 / 4;
+
     // Use pre-generated pattern or generate if first wave
     const pattern = waveSystem.nextWavePattern || generateWavePattern(waveSystem.currentWave);
     const newWave = spawnWave(scene, waveSystem.currentWave, pattern);
@@ -1958,6 +2007,15 @@ function update(time, delta) {
     // Activate game over state
     gameOver = true;
 
+    // Play crash cymbal sound
+    if (audioCtx) {
+      playCrash(audioCtx.currentTime);
+    }
+
+    // Reduce BPM to 100 for game over
+    musicBPM = 100;
+    beatInterval = (60 / musicBPM) * 1000 / 4;
+
     // Visual feedback
     condor.setTint(0xFF0000);
     condor.setAlpha(0.5);
@@ -1991,6 +2049,7 @@ Press SPACE to restart`;
       `Score: ${Math.floor(score)}`,
       `Wave: ${waveSystem.currentWave}`,
       `Velocity: ${CONFIG.obstacles.currentVelocity.toFixed(2)}`,
+      `BPM: ${Math.round(musicBPM)}`,
       `Active: ${waveSystem.activeObstacles.length}`,
       `Next: ${Math.round(waveSystem.currentWaveInterval - waveSystem.frameCounter)}f`,
       `Closest Z: ${Math.round(closestZ)}`,
