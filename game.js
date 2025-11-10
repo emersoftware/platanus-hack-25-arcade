@@ -68,9 +68,17 @@ let CONFIG = {
     step: 3
   },
   obstacles: {
-    velocity: 8.35,
+    baseVelocity: 6.0,         // Starting velocity (slower)
+    currentVelocity: 6.0,      // Will increase over time
+    targetVelocity: 11.0,      // Sweet spot - comfortable but challenging
+    growthRate: 8,             // How fast it reaches target (lower = faster)
     minSpeedMultiplier: 1.0,
     maxSpeedMultiplier: 3.0
+  },
+  rhythm: {
+    bpm: 120,                  // Future: base BPM for music sync
+    beatsPerWave: 4,           // Future: waves arrive every 4 beats
+    syncEnabled: false         // Future: toggle music sync
   },
   render: {
     spawnDistance: 1000,
@@ -134,16 +142,55 @@ const PERSPECTIVE_SYSTEM = {
 const WAVE_CONFIG = {
   spawnZ: 1200,           // Distance where obstacles appear
   arrivalZ: 100,          // Distance where they reach player
-  waveInterval: 60,       // Frames between waves (~1 second @ 60fps)
   obstaclesPerWave: 13    // Number of obstacles per wave
 };
+
+// Calculate velocity using logarithmic growth curve
+function calculateVelocity(waveNumber) {
+  // Exponential saturation curve: v = base + (target - base) * (1 - e^(-wave/growth))
+  // This creates fast initial growth that gradually slows down approaching target
+  const base = CONFIG.obstacles.baseVelocity;
+  const target = CONFIG.obstacles.targetVelocity;
+  const growth = CONFIG.obstacles.growthRate;
+
+  const velocity = base + (target - base) * (1 - Math.exp(-waveNumber / growth));
+  return velocity;
+}
+
+// Calculate dynamic wave interval based on current velocity
+function calculateWaveInterval() {
+  // Calculate average speed (considering acceleration)
+  const avgSpeed = CONFIG.obstacles.currentVelocity *
+    ((CONFIG.obstacles.minSpeedMultiplier + CONFIG.obstacles.maxSpeedMultiplier) / 2);
+
+  // Distance to travel
+  const distance = WAVE_CONFIG.spawnZ - WAVE_CONFIG.arrivalZ;
+
+  // Time in frames for a wave to complete (~frames)
+  const travelTime = distance / avgSpeed;
+
+  // Add 15% buffer to prevent overlap
+  const buffer = 1.15;
+
+  // If rhythm sync is enabled (future feature)
+  if (CONFIG.rhythm.syncEnabled && CONFIG.rhythm.bpm > 0) {
+    // Frames per beat at 60fps
+    const framesPerBeat = (60 * 60) / CONFIG.rhythm.bpm;
+    // Round to nearest beat multiple
+    const beatsNeeded = Math.ceil(travelTime * buffer / framesPerBeat);
+    return beatsNeeded * framesPerBeat;
+  }
+
+  return Math.ceil(travelTime * buffer);
+}
 
 // Wave system state
 let waveSystem = {
   currentWave: 0,
   frameCounter: 0,
   activeObstacles: [],
-  nextWavePattern: null  // Stores the pattern for next wave preview
+  nextWavePattern: null,  // Stores the pattern for next wave preview
+  currentWaveInterval: 100  // Dynamic interval calculated based on velocity
 };
 
 // Terrain colors by height (blue theme)
@@ -949,6 +996,10 @@ function startGame() {
   waveSystem.frameCounter = 0;
   waveSystem.nextWavePattern = null;
 
+  // Reset velocity to base (for progressive difficulty)
+  CONFIG.obstacles.currentVelocity = CONFIG.obstacles.baseVelocity;
+  waveSystem.currentWaveInterval = calculateWaveInterval();
+
   // Spawn first wave
   const firstWave = spawnWave(sceneRef, 0);
   waveSystem.activeObstacles.push(...firstWave);
@@ -980,6 +1031,11 @@ function returnToStartScreen() {
   // Clear obstacles
   waveSystem.activeObstacles.forEach(obs => obs.sprite.destroy());
   waveSystem.activeObstacles = [];
+
+  // Reset velocity and wave system
+  CONFIG.obstacles.currentVelocity = CONFIG.obstacles.baseVelocity;
+  waveSystem.currentWaveInterval = calculateWaveInterval();
+  waveSystem.frameCounter = 0;
 
   // Hide grid/rails
   debugRailsGraphics.clear();
@@ -1227,7 +1283,8 @@ function createDebugUI(scene, mainCamera) {
   const sliderDefs = [
     { label: 'Condor Speed', prop: ['condor', 'speed'], min: 1, max: 10, step: 0.5 },
     { label: 'Smoothing', prop: ['condor', 'smoothing'], min: 0.05, max: 0.5, step: 0.05 },
-    { label: 'Obstacle Vel', prop: ['obstacles', 'velocity'], min: 1, max: 15, step: 0.5 },
+    { label: 'Target Velocity', prop: ['obstacles', 'targetVelocity'], min: 8, max: 16, step: 0.5 },
+    { label: 'Growth Rate', prop: ['obstacles', 'growthRate'], min: 3, max: 20, step: 1 },
     { label: 'Min Speed Mult', prop: ['obstacles', 'minSpeedMultiplier'], min: 0.1, max: 1.0, step: 0.1 },
     { label: 'Max Speed Mult', prop: ['obstacles', 'maxSpeedMultiplier'], min: 1.0, max: 5.0, step: 0.5 },
     { label: 'Cam Zoom', prop: ['camera', 'zoom'], min: 1.0, max: 3.0, step: 0.1 },
@@ -1261,7 +1318,9 @@ function createSlider(scene, x, y, width, def) {
     color: '#ffff00'
   });
 
-  const valueText = scene.add.text(x + width - 40, y - 15, value.toFixed(1), {
+  // Ensure value is defined before calling toFixed
+  const displayValue = value !== undefined ? value.toFixed(1) : '0.0';
+  const valueText = scene.add.text(x + width - 40, y - 15, displayValue, {
     fontSize: '10px',
     fontFamily: 'Arial',
     color: '#00ff00'
@@ -1282,7 +1341,7 @@ function createSlider(scene, x, y, width, def) {
 function updateSliders(scene) {
   sliders.forEach(slider => {
     const def = slider.def;
-    const currentVal = CONFIG[def.prop[0]][def.prop[1]];
+    const currentVal = CONFIG[def.prop[0]][def.prop[1]] || def.min;
     const percent = (currentVal - def.min) / (def.max - def.min);
 
     slider.graphics.clear();
@@ -1311,7 +1370,7 @@ function updateSliders(scene) {
       slider.dragging = false;
     }
 
-    slider.value.setText(currentVal.toFixed(1));
+    slider.value.setText(currentVal !== undefined ? currentVal.toFixed(1) : '0.0');
   });
 }
 
@@ -1526,7 +1585,7 @@ function update(time, delta) {
   // Handle start screen state
   if (isStartScreen) {
     // Keep terrain animating
-    CONFIG.camera.worldZ += CONFIG.obstacles.velocity * deltaFrames;
+    CONFIG.camera.worldZ += CONFIG.obstacles.currentVelocity * deltaFrames;
     renderHeightmap(terrainGraphics, CONFIG.camera);
 
     // Detect any input to start game
@@ -1562,8 +1621,8 @@ function update(time, delta) {
     return;
   }
 
-  // Increment score (10 points per second at 60fps)
-  score += delta / 100;
+  // Increment score (20 points per second at 60fps)
+  score += delta / 50;
 
   updateCondor(delta);
 
@@ -1667,7 +1726,7 @@ function update(time, delta) {
   }
 
   // Update camera worldZ (forward movement) - adjusted for deltaFrames
-  CONFIG.camera.worldZ += CONFIG.obstacles.velocity * deltaFrames;
+  CONFIG.camera.worldZ += CONFIG.obstacles.currentVelocity * deltaFrames;
 
   // Keep camera X centered
   CONFIG.camera.worldX = 256; // Center of 512 heightmap
@@ -1678,10 +1737,13 @@ function update(time, delta) {
   // Frame-based wave system - adjusted for deltaFrames
   waveSystem.frameCounter += deltaFrames;
 
-  // Spawn new wave every X frames
-  if (waveSystem.frameCounter >= WAVE_CONFIG.waveInterval) {
+  // Spawn new wave based on dynamic interval
+  if (waveSystem.frameCounter >= waveSystem.currentWaveInterval) {
     waveSystem.frameCounter = 0;
     waveSystem.currentWave++;
+
+    // Update velocity using logarithmic growth curve
+    CONFIG.obstacles.currentVelocity = calculateVelocity(waveSystem.currentWave);
 
     // Use pre-generated pattern or generate if first wave
     const pattern = waveSystem.nextWavePattern || generateWavePattern(waveSystem.currentWave);
@@ -1690,6 +1752,12 @@ function update(time, delta) {
 
     // Generate and store NEXT wave pattern for preview
     waveSystem.nextWavePattern = generateWavePattern(waveSystem.currentWave + 1);
+
+    // Calculate interval for next wave based on new velocity
+    waveSystem.currentWaveInterval = calculateWaveInterval();
+
+    // Debug log (future: trigger beat/sound here)
+    console.log(`Wave ${waveSystem.currentWave}: v=${CONFIG.obstacles.currentVelocity.toFixed(2)}, interval=${Math.round(waveSystem.currentWaveInterval)}f`);
   }
 
   // Update active obstacles
@@ -1701,8 +1769,8 @@ function update(time, delta) {
 
     // Velocidad dinámica basada en proximidad
     const proximityFactor = 1 - (obs.z / WAVE_CONFIG.spawnZ);
-    const minSpeed = CONFIG.obstacles.velocity * CONFIG.obstacles.minSpeedMultiplier;
-    const maxSpeed = CONFIG.obstacles.velocity * CONFIG.obstacles.maxSpeedMultiplier;
+    const minSpeed = CONFIG.obstacles.currentVelocity * CONFIG.obstacles.minSpeedMultiplier;
+    const maxSpeed = CONFIG.obstacles.currentVelocity * CONFIG.obstacles.maxSpeedMultiplier;
     const dynamicSpeed = minSpeed + (maxSpeed - minSpeed) * proximityFactor;
 
     obs.z -= dynamicSpeed * deltaFrames;
@@ -1785,8 +1853,10 @@ Press SPACE to restart`;
     debugUI.status.setText([
       `FPS: ${fps}`,
       `Score: ${Math.floor(score)}`,
+      `Wave: ${waveSystem.currentWave}`,
+      `Velocity: ${CONFIG.obstacles.currentVelocity.toFixed(2)}`,
       `Active: ${waveSystem.activeObstacles.length}`,
-      `Next: ${WAVE_CONFIG.waveInterval - waveSystem.frameCounter}f`,
+      `Next: ${Math.round(waveSystem.currentWaveInterval - waveSystem.frameCounter)}f`,
       `Closest Z: ${Math.round(closestZ)}`,
       cellInfo,
       `Condor: (${Math.round(condor.x)}, ${Math.round(condor.y)})`
