@@ -29,10 +29,8 @@ const game = new Phaser.Game(config);
 let CONFIG = {
   width: 800,
   height: 600,
-  // Speed multiplier: 100Hz monitor / 60Hz baseline = 1.67
-  speedMultiplier: 1.67,
   condor: {
-    speed: 10,
+    speed: 13.36,
     smoothing: 0.35,
     prevX: 400,
     prevY: 300,
@@ -41,9 +39,11 @@ let CONFIG = {
     hitboxWidth: 35,   // 70% del ancho visual (50 × 0.7)
     hitboxHeight: 15,  // 75% del alto visual (20 × 0.75)
     // Barrel roll / Dash
-    dashDistance: 200, // Doble de una celda (100px por celda)
-    dashSpeed: 20,     // Doble de velocidad normal (10 * 2)
-    dashDuration: 20   // Frames para completar el dash
+    dashDistanceH: 200,    // 2 celdas horizontales (100px por celda)
+    dashDistanceV: 160,    // 2 celdas verticales (80px por celda)
+    dashDurationH: 21.4,   // Frames para dash horizontal (2x velocidad normal efectiva)
+    dashDurationV: 17.1,   // Frames para dash vertical (2x velocidad normal efectiva)
+    dashDurationDiag: 13.7 // Frames para dash diagonal (2x velocidad normal efectiva)
   },
   camera: {
     worldX: 256,
@@ -57,7 +57,8 @@ let CONFIG = {
     rotationSensitivity: 0.02,
     maxRotation: 0.1,
     perspectiveShift: 0.4,
-    perspectiveLerp: 0.1
+    perspectiveLerp: 0.1,
+    centerPullFactor: 0.30
   },
   heightmap: {
     size: 512,
@@ -67,7 +68,7 @@ let CONFIG = {
     step: 3
   },
   obstacles: {
-    velocity: 5,
+    velocity: 8.35,
     minSpeedMultiplier: 1.0,
     maxSpeedMultiplier: 3.0
   },
@@ -133,7 +134,7 @@ const PERSPECTIVE_SYSTEM = {
 const WAVE_CONFIG = {
   spawnZ: 1200,           // Distance where obstacles appear
   arrivalZ: 100,          // Distance where they reach player
-  waveInterval: 100,      // Frames between waves (~1.67 seconds @ 60fps)
+  waveInterval: 60,       // Frames between waves (~1 second @ 60fps)
   obstaclesPerWave: 13    // Number of obstacles per wave
 };
 
@@ -169,6 +170,7 @@ let heightmapData = null;
 let terrainGraphics = null;
 let backgroundGradientCache = null;
 let condor;
+let cameraTarget;
 let cursors;
 let spaceKey;
 let debugKey;
@@ -202,6 +204,7 @@ let beatInterval = (60 / musicBPM) * 1000 / 4; // 16th notes in ms
 // Dash / Barrel Roll state
 let isDashing = false;
 let dashProgress = 0;
+let currentDashDuration = 7.5; // Set dynamically based on dash direction
 let dashDirection = { x: 0, y: 0 };
 let dashStartX = 0;
 let dashStartY = 0;
@@ -498,7 +501,10 @@ function interpolateQuadAlongRail(rail, z) {
         clampedT
       )
     },
-    scale: lerp(0.2, 2.0, clampedT)  // For reference
+    // Sprites are 48x38px
+    // Near grid: 100x80px cells, scale 2.0 → 96x76px sprite (2px margin)
+    // Far grid: 40x32px cells, scale 0.8 → 38.4x30.4px sprite (0.8px margin, same 2% ratio)
+    scale: lerp(0.8, 2.0, clampedT)
   };
 }
 
@@ -1105,10 +1111,13 @@ function create() {
   condorHitboxIndicator = this.add.graphics();
   condorHitboxIndicator.setDepth(DEPTH_LAYERS.UI - 1); // Dibuja encima del condor
 
+  // Create virtual camera target (invisible point between condor and grid center)
+  cameraTarget = this.add.container(CONFIG.width / 2, CONFIG.height / 2);
+
   // Configure main camera with zoom and follow
   const mainCamera = this.cameras.main;
   mainCamera.setZoom(CONFIG.camera.zoom);
-  mainCamera.startFollow(condor, true, CONFIG.camera.followLerp, CONFIG.camera.followLerp);
+  mainCamera.startFollow(cameraTarget, true, CONFIG.camera.followLerp, CONFIG.camera.followLerp);
 
   // Create separate UI camera (no zoom, no rotation, no scroll)
   const uiCamera = this.cameras.add(0, 0, CONFIG.width, CONFIG.height);
@@ -1359,13 +1368,27 @@ function startDash(dirX, dirY) {
   dashStartX = condor.x;
   dashStartY = condor.y;
 
-  // Variable distance: diagonal (2 directions) = 100px, single = 200px
+  // Detect dash direction type and set appropriate duration and distances
   const isDiagonal = dirX !== 0 && dirY !== 0;
-  const distance = isDiagonal ? 100 : CONFIG.condor.dashDistance;
+  const isHorizontalOnly = dirX !== 0 && dirY === 0;
+  const isVerticalOnly = dirX === 0 && dirY !== 0;
 
-  // Calculate target position
-  dashTargetX = condor.x + dirX * distance;
-  dashTargetY = condor.y + dirY * distance;
+  // Set duration based on direction (for 2x normal speed in all directions)
+  if (isDiagonal) {
+    currentDashDuration = CONFIG.condor.dashDurationDiag;
+  } else if (isHorizontalOnly) {
+    currentDashDuration = CONFIG.condor.dashDurationH;
+  } else {
+    currentDashDuration = CONFIG.condor.dashDurationV;
+  }
+
+  // Distance: 2 cells for single direction, 1 cell per component for diagonal
+  const horizontalDist = isDiagonal ? 100 : CONFIG.condor.dashDistanceH; // 100px = 1 cell for diagonal
+  const verticalDist = isDiagonal ? 80 : CONFIG.condor.dashDistanceV;    // 80px = 1 cell for diagonal
+
+  // Calculate target position with proportional distances
+  dashTargetX = condor.x + dirX * horizontalDist;
+  dashTargetY = condor.y + dirY * verticalDist;
 
   // Clamp to limits
   dashTargetX = Phaser.Math.Clamp(dashTargetX, CONFIG.limits.minX, CONFIG.limits.maxX);
@@ -1378,11 +1401,11 @@ function startDash(dirX, dirY) {
 function updateDash(delta) {
   if (!isDashing) return;
 
-  const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
+  const deltaFrames = (delta / 1000) * 60;
   dashProgress += deltaFrames;
 
-  // Linear interpolation for position
-  const t = dashProgress / CONFIG.condor.dashDuration;
+  // Linear interpolation for position using dynamic duration
+  const t = dashProgress / currentDashDuration;
   const easedT = Phaser.Math.Clamp(t, 0, 1);
 
   condor.x = dashStartX + (dashTargetX - dashStartX) * easedT;
@@ -1405,7 +1428,7 @@ function updateDash(delta) {
   }
 
   // End dash
-  if (dashProgress >= CONFIG.condor.dashDuration) {
+  if (dashProgress >= currentDashDuration) {
     isDashing = false;
     dashProgress = 0;
     condor.rotation = 0;
@@ -1416,7 +1439,7 @@ function updateDash(delta) {
 }
 
 function updateCondor(delta) {
-  const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
+  const deltaFrames = (delta / 1000) * 60;
 
   // Register SPACE key press for input buffer
   if (Phaser.Input.Keyboard.JustDown(spaceKey) && !isDashing) {
@@ -1492,7 +1515,7 @@ function updateCondor(delta) {
 
 function update(time, delta) {
   const scene = this;
-  const deltaFrames = (delta / 1000) * 60 * CONFIG.speedMultiplier;
+  const deltaFrames = (delta / 1000) * 60;
 
   // Toggle debug UI
   if (Phaser.Input.Keyboard.JustDown(debugKey)) {
@@ -1543,6 +1566,15 @@ function update(time, delta) {
   score += delta / 100;
 
   updateCondor(delta);
+
+  // Update virtual camera target position (interpolate between condor and grid center)
+  const gridCenterX = CONFIG.width / 2; // 400
+  const gridCenterY = CONFIG.height / 2; // 300
+  const pullFactor = CONFIG.camera.centerPullFactor; // 0.5 by default
+  const virtualX = condor.x + (gridCenterX - condor.x) * pullFactor;
+  const virtualY = condor.y + (gridCenterY - condor.y) * pullFactor;
+  cameraTarget.setPosition(virtualX, virtualY);
+
   updateDynamicPerspective();
 
   // Apply camera rotation based on condor movement
@@ -1691,10 +1723,10 @@ function update(time, delta) {
     obs.sprite.setPosition(quad.center.x, quad.center.y);
 
     // Scale sprite based on Z distance
-    // Sprite base size: 50×40
-    // Near cell size: 100×80 (requires 2x scale)
-    // quad.scale already goes from 0.2 (far) to 2.0 (near)
-    // At near: quad.scale=2.0 → 50*2=100, 40*2=80 ✓
+    // Sprite size: 48×38px
+    // Near: 100×80px cells, scale 2.0 → 96×76px (2px margin)
+    // Far: 40×32px cells, scale 0.8 → 38.4×30.4px (0.8px margin, same 2% ratio)
+    // quad.scale goes from 0.8 (far) to 2.0 (near)
     obs.sprite.setScale(quad.scale, quad.scale);
 
     // Mapear Z a un rango que NUNCA supere al condor
