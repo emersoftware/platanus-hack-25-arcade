@@ -38,12 +38,11 @@ let CONFIG = {
     // Hitbox para colisiones (más pequeño que el visual 50×20)
     hitboxWidth: 35,   // 70% del ancho visual (50 × 0.7)
     hitboxHeight: 15,  // 75% del alto visual (20 × 0.75)
-    // Barrel roll / Dash
-    dashDistanceH: 200,    // 2 celdas horizontales (100px por celda)
-    dashDistanceV: 160,    // 2 celdas verticales (80px por celda)
-    dashDurationH: 21.4,   // Frames para dash horizontal (2x velocidad normal efectiva)
-    dashDurationV: 17.1,   // Frames para dash vertical (2x velocidad normal efectiva)
-    dashDurationDiag: 13.7 // Frames para dash diagonal (2x velocidad normal efectiva)
+    dashDistanceH: 100,
+    dashDistanceV: 80,
+    dashDurationH: 10.7,
+    dashDurationV: 8.6,
+    dashDurationDiag: 13.7
   },
   camera: {
     worldX: 256,
@@ -276,7 +275,12 @@ let dashTargetX = 0;
 let dashTargetY = 0;
 let dashRotation = 0;
 let spaceKeyPressTime = 0;
-let spaceKeyBufferWindow = 150; // ms for input buffer
+let spaceKeyBufferWindow = 150;
+let allowDoubleDash = false;
+let isDoubleDash = false;
+let dashInitialX = 0;
+let dashInitialY = 0;
+let dashExtendPressTime = 0;
 
 // Heightmap generation (simplified Perlin-like noise)
 function noise2D(x, z) {
@@ -922,6 +926,26 @@ function playCrash(time) {
   noise.stop(time + 0.8);
 }
 
+function playDashWhoosh(t, p = 0) {
+  const n = audioCtx.createBufferSource();
+  const b = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  n.buffer = b;
+  const f = audioCtx.createBiquadFilter();
+  f.type = 'bandpass';
+  f.frequency.setValueAtTime(2000 + p, t);
+  f.Q.value = 1.5;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.25, t);
+  g.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+  n.connect(f);
+  f.connect(g);
+  g.connect(masterGain);
+  n.start(t);
+  n.stop(t + 0.15);
+}
+
 function playBass(time, note = 0) {
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -1266,6 +1290,15 @@ function create() {
 
   cursors = this.input.keyboard.createCursorKeys();
   spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+  const handleSpaceDown = () => {
+    const now = Date.now();
+    if (isDashing) {
+      dashExtendPressTime = now;
+    } else {
+      spaceKeyPressTime = now;
+    }
+  };
+  this.input.keyboard.on('keydown-SPACE', handleSpaceDown);
   debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
 
   createDebugUI(this, mainCamera);
@@ -1486,104 +1519,89 @@ function updateDynamicPerspective() {
   updateNextWavePreview(nextWavePreview, waveSystem.nextWavePattern);
 }
 
-// Start dash/barrel roll
 function startDash(dirX, dirY) {
-  if (isDashing) return; // Already dashing
-
+  if (isDashing) return;
   isDashing = true;
   dashProgress = 0;
   dashDirection.x = dirX;
   dashDirection.y = dirY;
   dashStartX = condor.x;
   dashStartY = condor.y;
-
-  // Detect dash direction type and set appropriate duration and distances
+  dashInitialX = condor.x;
+  dashInitialY = condor.y;
+  allowDoubleDash = true;
+  isDoubleDash = false;
+  playDashWhoosh(audioCtx.currentTime, 0);
   const isDiagonal = dirX !== 0 && dirY !== 0;
-  const isHorizontalOnly = dirX !== 0 && dirY === 0;
-  const isVerticalOnly = dirX === 0 && dirY !== 0;
-
-  // Set duration based on direction (for 2x normal speed in all directions)
   if (isDiagonal) {
     currentDashDuration = CONFIG.condor.dashDurationDiag;
-  } else if (isHorizontalOnly) {
+  } else if (dirX !== 0) {
     currentDashDuration = CONFIG.condor.dashDurationH;
   } else {
     currentDashDuration = CONFIG.condor.dashDurationV;
   }
-
-  // Distance: 2 cells for single direction, 1 cell per component for diagonal
-  const horizontalDist = isDiagonal ? 100 : CONFIG.condor.dashDistanceH; // 100px = 1 cell for diagonal
-  const verticalDist = isDiagonal ? 80 : CONFIG.condor.dashDistanceV;    // 80px = 1 cell for diagonal
-
-  // Calculate target position with proportional distances
+  const horizontalDist = isDiagonal ? 100 : CONFIG.condor.dashDistanceH;
+  const verticalDist = isDiagonal ? 80 : CONFIG.condor.dashDistanceV;
   dashTargetX = condor.x + dirX * horizontalDist;
   dashTargetY = condor.y + dirY * verticalDist;
-
-  // Clamp to limits
   dashTargetX = Phaser.Math.Clamp(dashTargetX, CONFIG.limits.minX, CONFIG.limits.maxX);
   dashTargetY = Phaser.Math.Clamp(dashTargetY, CONFIG.limits.minY, CONFIG.limits.maxY);
-
   dashRotation = 0;
 }
 
-// Update dash/barrel roll
+function extendDash() {
+  if (!allowDoubleDash || isDoubleDash) return;
+  isDoubleDash = true;
+  allowDoubleDash = false;
+  playDashWhoosh(audioCtx.currentTime, 500);
+  dashTargetX = Phaser.Math.Clamp(dashInitialX + dashDirection.x * 200, CONFIG.limits.minX, CONFIG.limits.maxX);
+  dashTargetY = Phaser.Math.Clamp(dashInitialY + dashDirection.y * 160, CONFIG.limits.minY, CONFIG.limits.maxY);
+  currentDashDuration *= 2;
+}
+
 function updateDash(delta) {
   if (!isDashing) return;
 
   const deltaFrames = (delta / 1000) * 60;
   dashProgress += deltaFrames;
-
-  // Linear interpolation for position using dynamic duration
   const t = dashProgress / currentDashDuration;
   const easedT = Phaser.Math.Clamp(t, 0, 1);
-
   condor.x = dashStartX + (dashTargetX - dashStartX) * easedT;
   condor.y = dashStartY + (dashTargetY - dashStartY) * easedT;
-
-  // Determine movement type
   const hasHorizontal = dashDirection.x !== 0;
   const hasVertical = dashDirection.y !== 0;
-
   if (hasHorizontal) {
-    // HORIZONTAL or DIAGONAL: Rotate with frame 2
-    const rotationDirection = dashDirection.x; // -1 or 1
+    const rotationDirection = dashDirection.x;
     dashRotation = rotationDirection * easedT * Math.PI * 2;
     condor.rotation = dashRotation;
-    condor.setFrame(2); // Frame 3
+    condor.setFrame(2);
   } else if (hasVertical) {
-    // VERTICAL ONLY: No rotation, freeze frame 0
     condor.rotation = 0;
-    condor.setFrame(0); // Frame 1 (frozen)
+    condor.setFrame(0);
   }
-
-  // End dash
   if (dashProgress >= currentDashDuration) {
     isDashing = false;
     dashProgress = 0;
     condor.rotation = 0;
     dashRotation = 0;
-    // Return to normal animation
+    allowDoubleDash = false;
+    isDoubleDash = false;
+    dashExtendPressTime = 0;
     condor.play('condor_fly');
   }
 }
 
 function updateCondor(delta) {
   const deltaFrames = (delta / 1000) * 60;
-
-  // Register SPACE key press for input buffer
   if (Phaser.Input.Keyboard.JustDown(spaceKey) && !isDashing) {
     spaceKeyPressTime = Date.now();
   }
-
-  // Check for dash input (SPACE + direction with buffer)
   const timeSinceSpace = Date.now() - spaceKeyPressTime;
   const withinBuffer = timeSinceSpace < spaceKeyBufferWindow && timeSinceSpace > 0;
 
   if (withinBuffer && !isDashing) {
     let dirX = 0;
     let dirY = 0;
-
-    // Capture BOTH directions independently (allows diagonals)
     if (cursors.left.isDown || Phaser.Input.Keyboard.JustDown(cursors.left)) {
       dirX = -1;
     } else if (cursors.right.isDown || Phaser.Input.Keyboard.JustDown(cursors.right)) {
@@ -1596,24 +1614,20 @@ function updateCondor(delta) {
       dirY = 1;
     }
 
-    // Start dash if direction detected
     if (dirX !== 0 || dirY !== 0) {
       startDash(dirX, dirY);
-      spaceKeyPressTime = 0; // Reset buffer
+      spaceKeyPressTime = 0;
     }
   }
 
-  // If dashing, update dash instead of normal movement
   if (isDashing) {
+    if (Phaser.Input.Keyboard.JustDown(spaceKey)) dashExtendPressTime = Date.now();
+    if (Date.now() - dashExtendPressTime < 100 && dashExtendPressTime && allowDoubleDash && !isDoubleDash) extendDash(), dashExtendPressTime = 0;
     updateDash(delta);
-
-    // Store prev positions for camera
     CONFIG.condor.prevX = condor.x;
     CONFIG.condor.prevY = condor.y;
     return;
   }
-
-  // Normal movement (not dashing)
   let targetX = condor.x;
   let targetY = condor.y;
 
@@ -1629,8 +1643,6 @@ function updateCondor(delta) {
 
   CONFIG.condor.prevX = condor.x;
   CONFIG.condor.prevY = condor.y;
-
-  // Smoothing adjusted for deltaFrames
   const smoothingAdjusted = 1 - Math.pow(1 - CONFIG.condor.smoothing, deltaFrames);
   condor.x += (targetX - condor.x) * smoothingAdjusted;
   condor.y += (targetY - condor.y) * smoothingAdjusted;
