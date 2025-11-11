@@ -108,8 +108,7 @@ const DEPTH_LAYERS = {
   OBSTACLES_NEAR: 300,   // Obstacles when approaching
   CELL_INDICATOR: 450,
   CONDOR: 500,
-  UI: 600,
-  DEBUG_UI: 700
+  UI: 600
 };
 
 // Perspective rail system
@@ -236,10 +235,6 @@ let condor;
 let cameraTarget;
 let cursors;
 let spaceKey;
-let debugKey;
-let debugVisible = false;
-let debugUI = {};
-let sliders = [];
 let scoreText;
 let scoreBackground;
 let gameOverText;
@@ -1299,9 +1294,6 @@ function create() {
     }
   };
   this.input.keyboard.on('keydown-SPACE', handleSpaceDown);
-  debugKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
-
-  createDebugUI(this, mainCamera);
 
   // Semi-transparent red background for score (covers entire screen)
   scoreBackground = this.add.graphics();
@@ -1358,123 +1350,7 @@ function create() {
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
 
   // Make main camera ignore UI elements
-  mainCamera.ignore([scoreText, scoreBackground, gameOverText, startScreenUI.title, startScreenUI.instruction, debugUI.container]);
-}
-
-function createDebugUI(scene, mainCamera) {
-  debugUI.container = scene.add.container(0, 0).setDepth(DEPTH_LAYERS.DEBUG_UI);
-  debugUI.bg = scene.add.rectangle(0, 0, 280, 640, 0x000000, 0.85);
-  debugUI.bg.setOrigin(0, 0);
-  debugUI.container.add(debugUI.bg);
-
-  debugUI.title = scene.add.text(10, 10, 'DEBUG (D)', {
-    fontSize: '14px',
-    fontFamily: 'Arial',
-    color: '#00ff00',
-    fontStyle: 'bold'
-  });
-  debugUI.container.add(debugUI.title);
-
-  debugUI.status = scene.add.text(10, 35, '', {
-    fontSize: '11px',
-    fontFamily: 'Arial',
-    color: '#ffffff'
-  });
-  debugUI.container.add(debugUI.status);
-
-  const y = 130;
-  const sliderDefs = [
-    { label: 'Condor Speed', prop: ['condor', 'speed'], min: 1, max: 10, step: 0.5 },
-    { label: 'Smoothing', prop: ['condor', 'smoothing'], min: 0.05, max: 0.5, step: 0.05 },
-    { label: 'Target Velocity', prop: ['obstacles', 'targetVelocity'], min: 8, max: 16, step: 0.5 },
-    { label: 'Growth Rate', prop: ['obstacles', 'growthRate'], min: 3, max: 20, step: 1 },
-    { label: 'Min Speed Mult', prop: ['obstacles', 'minSpeedMultiplier'], min: 0.1, max: 1.0, step: 0.1 },
-    { label: 'Max Speed Mult', prop: ['obstacles', 'maxSpeedMultiplier'], min: 1.0, max: 5.0, step: 0.5 },
-    { label: 'Cam Zoom', prop: ['camera', 'zoom'], min: 1.0, max: 3.0, step: 0.1 },
-    { label: 'Cam Rotation', prop: ['camera', 'rotationSensitivity'], min: 0.0, max: 0.1, step: 0.01 },
-    { label: 'Max Rotation', prop: ['camera', 'maxRotation'], min: 0.0, max: 0.3, step: 0.05 },
-    { label: 'Perspective Shift', prop: ['camera', 'perspectiveShift'], min: 0.0, max: 1.0, step: 0.1 },
-    { label: 'Perspective Lerp', prop: ['camera', 'perspectiveLerp'], min: 0.0, max: 0.5, step: 0.05 },
-    { label: 'Cam Factor', prop: ['camera', 'displacementFactor'], min: 0.3, max: 1.5, step: 0.1 },
-    { label: 'Cam Height', prop: ['camera', 'height'], min: 50, max: 200, step: 5 },
-    { label: 'Max Cam Disp', prop: ['camera', 'maxDisplacement'], min: 100, max: 400, step: 10 }
-  ];
-
-  sliderDefs.forEach((def, i) => {
-    const slider = createSlider(scene, 10, y + i * 33, 260, def);
-    debugUI.container.add(slider.graphics);
-    debugUI.container.add(slider.label);
-    debugUI.container.add(slider.value);
-    sliders.push(slider);
-  });
-
-  debugUI.container.setVisible(false);
-}
-
-function createSlider(scene, x, y, width, def) {
-  const value = CONFIG[def.prop[0]][def.prop[1]];
-  const graphics = scene.add.graphics();
-
-  const label = scene.add.text(x, y - 15, def.label, {
-    fontSize: '10px',
-    fontFamily: 'Arial',
-    color: '#ffff00'
-  });
-
-  // Ensure value is defined before calling toFixed
-  const displayValue = value !== undefined ? value.toFixed(1) : '0.0';
-  const valueText = scene.add.text(x + width - 40, y - 15, displayValue, {
-    fontSize: '10px',
-    fontFamily: 'Arial',
-    color: '#00ff00'
-  });
-
-  return {
-    graphics: graphics,
-    label: label,
-    value: valueText,
-    x: x,
-    y: y,
-    width: width,
-    def: def,
-    dragging: false
-  };
-}
-
-function updateSliders(scene) {
-  sliders.forEach(slider => {
-    const def = slider.def;
-    const currentVal = CONFIG[def.prop[0]][def.prop[1]] || def.min;
-    const percent = (currentVal - def.min) / (def.max - def.min);
-
-    slider.graphics.clear();
-    slider.graphics.fillStyle(0x333333);
-    slider.graphics.fillRect(slider.x, slider.y, slider.width, 10);
-    slider.graphics.fillStyle(0x00ff00);
-    slider.graphics.fillRect(slider.x, slider.y, slider.width * percent, 10);
-    slider.graphics.lineStyle(1, 0xffffff);
-    slider.graphics.strokeRect(slider.x, slider.y, slider.width, 10);
-
-    const pointer = scene.input.activePointer;
-    if (pointer.isDown) {
-      const sliderBounds = new Phaser.Geom.Rectangle(slider.x, slider.y, slider.width, 10);
-      if (Phaser.Geom.Rectangle.Contains(sliderBounds, pointer.x, pointer.y) || slider.dragging) {
-        slider.dragging = true;
-        const newPercent = Phaser.Math.Clamp((pointer.x - slider.x) / slider.width, 0, 1);
-        const newVal = def.min + newPercent * (def.max - def.min);
-        CONFIG[def.prop[0]][def.prop[1]] = Math.round(newVal / def.step) * def.step;
-
-        // Apply zoom in real-time
-        if (def.prop[0] === 'camera' && def.prop[1] === 'zoom') {
-          scene.cameras.main.setZoom(CONFIG.camera.zoom);
-        }
-      }
-    } else {
-      slider.dragging = false;
-    }
-
-    slider.value.setText(currentVal !== undefined ? currentVal.toFixed(1) : '0.0');
-  });
+  mainCamera.ignore([scoreText, scoreBackground, gameOverText, startScreenUI.title, startScreenUI.instruction]);
 }
 
 function updateRelativeCamera() {
@@ -1658,12 +1534,6 @@ function update(time, delta) {
   const scene = this;
   const deltaFrames = (delta / 1000) * 60;
 
-  // Toggle debug UI
-  if (Phaser.Input.Keyboard.JustDown(debugKey)) {
-    debugVisible = !debugVisible;
-    debugUI.container.setVisible(debugVisible);
-  }
-
   // Handle start screen state
   if (isStartScreen) {
     // Keep terrain animating
@@ -1791,59 +1661,6 @@ function update(time, delta) {
         rail.near.bottomLeft.y - rail.near.topLeft.y
       );
     });
-  }
-
-  // DEBUG: Draw arrival matrix state as visual overlay
-  if (debugVisible && waveSystem.arrivalWaveId !== null) {
-    waveSystem.arrivalMatrix.forEach((hasObstacle, cellId) => {
-      if (hasObstacle === 1) {
-        const rail = RAILS[cellId];
-        if (rail && rail.near) {
-          // Draw semi-transparent red rectangle on cells with obstacles
-          condorCellIndicator.lineStyle(0);
-          condorCellIndicator.fillStyle(0xFF0000, 0.3); // Semi-transparent red
-          condorCellIndicator.fillRect(
-            rail.near.topLeft.x,
-            rail.near.topLeft.y,
-            rail.near.topRight.x - rail.near.topLeft.x,
-            rail.near.bottomLeft.y - rail.near.topLeft.y
-          );
-
-          // Also show grid coordinates
-          const col = cellId % 5;
-          const row = Math.floor(cellId / 5);
-          const centerX = (rail.near.topLeft.x + rail.near.topRight.x) / 2;
-          const centerY = (rail.near.topLeft.y + rail.near.bottomLeft.y) / 2;
-
-          // Draw text showing cell coordinates
-          condorCellIndicator.lineStyle(0);
-          condorCellIndicator.fillStyle(0xFFFFFF, 1);
-        }
-      }
-    });
-  }
-
-  // Draw hitbox indicator (collision area - smaller than visual)
-  condorHitboxIndicator.clear();
-  if (debugVisible) {
-    const hitboxX = condor.x - CONFIG.condor.hitboxWidth / 2;
-    const hitboxY = condor.y - CONFIG.condor.hitboxHeight / 2;
-
-    condorHitboxIndicator.lineStyle(2, 0xFF0000, 0.8); // Red border
-    condorHitboxIndicator.strokeRect(
-      hitboxX,
-      hitboxY,
-      CONFIG.condor.hitboxWidth,
-      CONFIG.condor.hitboxHeight
-    );
-
-    condorHitboxIndicator.fillStyle(0xFF0000, 0.2); // Red semi-transparent fill
-    condorHitboxIndicator.fillRect(
-      hitboxX,
-      hitboxY,
-      CONFIG.condor.hitboxWidth,
-      CONFIG.condor.hitboxHeight
-    );
   }
 
   // Update camera worldZ (forward movement) - adjusted for deltaFrames
@@ -2048,25 +1865,4 @@ Press SPACE to restart`;
 
   // Update UI text
   scoreText.setText(formatScoreFullwidth(score));
-
-  if (debugVisible) {
-    updateSliders(scene);
-    const fps = Math.round(1000 / delta);
-    const cellInfo = condorCells
-      ? `Cells: [${condorCells.map(c => c.id).join(',')}]`
-      : 'Out of bounds';
-
-    debugUI.status.setText([
-      `FPS: ${fps}`,
-      `Score: ${Math.floor(score)}`,
-      `Wave: ${waveSystem.currentWave}`,
-      `Velocity: ${CONFIG.obstacles.currentVelocity.toFixed(2)}`,
-      `BPM: ${Math.round(musicBPM)}`,
-      `Active: ${waveSystem.activeObstacles.length}`,
-      `Next: ${Math.round(waveSystem.currentWaveInterval - waveSystem.frameCounter)}f`,
-      `Closest Z: ${Math.round(closestZ)}`,
-      cellInfo,
-      `Condor: (${Math.round(condor.x)}, ${Math.round(condor.y)})`
-    ].join('\n'));
-  }
 }
