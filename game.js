@@ -78,8 +78,8 @@ let CONFIG = {
     speed: 13.36,
     smoothing: 0.35,
     prevX: 400,
-    prevY: 300,
-    centerY: 300,
+    prevY: 380,
+    centerY: 380,
     // Hitbox para colisiones (más pequeño que el visual 50×20)
     hitboxWidth: 35,   // 70% del ancho visual (50 × 0.7)
     hitboxHeight: 15,  // 75% del alto visual (20 × 0.75)
@@ -1135,10 +1135,14 @@ function startGame() {
 
   // Reset condor
   condor.x = 400;
-  condor.y = 300;
+  condor.y = 380;
   condor.rotation = 0;
   condor.setAlpha(1);
   condor.clearTint();
+
+  // Reset camera target to center
+  cameraTarget.setPosition(400, 380);
+  sceneRef.cameras.main.setRotation(0);
 
   // Reset dash
   isDashing = false;
@@ -1206,12 +1210,16 @@ function returnToStartScreen() {
   nextWavePreview.clear();
   nextWavePreview.setVisible(false);
 
-  // Reset condor visual
+  // Reset condor visual (lower position for start screen to avoid overlap with text)
   condor.x = 400;
-  condor.y = 300;
+  condor.y = 460;
   condor.rotation = 0;
   condor.setAlpha(1);
   condor.clearTint();
+
+  // Reset camera target to center
+  cameraTarget.setPosition(400, 460);
+  sceneRef.cameras.main.setRotation(0);
 }
 
 // Restart game (when pressing space in game over)
@@ -1290,8 +1298,8 @@ function create() {
     }
   });
 
-  // Create condor sprite (will use frame 0 initially)
-  condor = this.add.sprite(400, 300, 'condor', 0);
+  // Create condor sprite (will use frame 0 initially - start screen position)
+  condor = this.add.sprite(400, 460, 'condor', 0);
   condor.setDepth(DEPTH_LAYERS.CONDOR);
 
   // Load 3 independent obstacle textures (each 50×40px)
@@ -1323,8 +1331,8 @@ function create() {
   condorHitboxIndicator = this.add.graphics();
   condorHitboxIndicator.setDepth(DEPTH_LAYERS.UI - 1); // Dibuja encima del condor
 
-  // Create virtual camera target (invisible point between condor and grid center)
-  cameraTarget = this.add.container(CONFIG.width / 2, CONFIG.height / 2);
+  // Create virtual camera target (invisible point between condor and grid center - start screen position)
+  cameraTarget = this.add.container(400, 460);
 
   // Configure main camera with zoom and follow
   const mainCamera = this.cameras.main;
@@ -1467,9 +1475,7 @@ function create() {
   startScreenUI.instruction = this.add.text(400, 380, 'Press any button to start', {
     fontSize: '24px',
     fontFamily: 'Arial',
-    color: '#ffff00',
-    stroke: '#000000',
-    strokeThickness: 4
+    color: '#AAFFAA'
   }).setOrigin(0.5).setDepth(DEPTH_LAYERS.UI);
 
   // Make main camera ignore UI elements
@@ -1661,6 +1667,10 @@ function update(time, delta) {
 
   // Handle start screen state
   if (isStartScreen) {
+    // Keep camera centered for start screen (don't follow condor)
+    scene.cameras.main.scrollX = 0;
+    scene.cameras.main.scrollY = 0;
+
     // Keep terrain animating
     CONFIG.camera.worldZ += CONFIG.obstacles.currentVelocity * deltaFrames;
     renderHeightmap(terrainGraphics, CONFIG.camera);
@@ -1983,10 +1993,11 @@ function update(time, delta) {
 
 ${formatScoreFullwidth(score)}
 
-Press SPACE to restart`;
+Press any button to restart`;
     gameOverText.setText(gameOverAscii);
     gameOverText.setVisible(true);
     scoreBackground.setVisible(true);
+    scoreText.setVisible(false);  // Hide gameplay score UI
   }
 
   // Update UI text
