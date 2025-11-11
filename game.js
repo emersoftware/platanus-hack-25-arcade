@@ -8,6 +8,51 @@ const OBSTACLES_SPRITE_0 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAA
 const OBSTACLES_SPRITE_1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAmCAYAAACCjRgBAAAB2ElEQVR42tVZW27DMAzT6XriXWg36A26tWgKzxEtknI+FsDYEudBiRRloxHv43G/P/7TiPEYJ75vt/QBdB2N+f7q3HnmA/45gW5WX9o9Z585rsU4iUDvGNU72UAP8Mc4MZAF1AHTkR7K/Ig1ZuBqphSgDrNZ5sfzNAAmqK7MUKaREjLwSwauBs2yjYCfihhlvkO7IrlVDWbALQlVhe7UAWJ6BfokoRVQth+oYJm5DPw8H0ym2UBWQSlSUkZcIZ3KkiunYXFQLsSwsLNTtxhgipmRgsoUsky5kTkS2uk8CgMtCbn+v0oAY5lWJ0YfUGXDBs8EATvxjuJlWVglKBtfv1sXuhOzizonu8p9tgtVXVEBoNxXZb4sYkdOO7M/vh8Bl/qAuszuZN6xULuImayy9YO+ITFQdV3G2o4PPv+O/2dz83VlyKtRl+bOyBig9wOrILKMXR1UtU4Kt6073RNJywmkdKFKNq6LzKBXQTDby1CX0aOckGtk3j7OZwwwgWTqiApkx+KYroqCYJmBEjpewPQCBfgOJqi1kNvgmIJVmLA2NM4ewZXTVgk5Ptxxm0pO8lJCDcLRPmujrIxev9JU1pUVtOM47Dwrqz+/k+1o9Si7nQ4MpfM+fgCI3WJhOLzt4AAAAABJRU5ErkJggg==';
 const OBSTACLES_SPRITE_2 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAmCAYAAACCjRgBAAAB7klEQVR42sVZW24DMQjkdDlxL9Qb5AZp++GVFwEzA06z0mpfMWZ4Q8yK4/V8vj51mnJ8ktExqGrB1+/n/2Qw2u/78agBIaJ/BHYiFUHmOwNg0ciuNxARs9HCCeMMKC99BGJdjZVyBqIj8WgNI30v4BsAz2TEMKMJxGjGfMZDtGZ/b5nKqncTO48Eokjf82PVAtWckMOhIKFeSwAI0AlN7KbTAXCZUAf5emZzRcQoGzahBk6AWKd/Xu+isxs6bwA66Kt7JpJV9+pVikLVb5DJVLF/7AMMANWxUQiOkpIixLSUYOogJF1Fc10Aa19jzEBxKnXNbkZHotBEKshZUS7pCMQ68TuSYkcLKCAwgIxZqH5XzOxtGug4ZkcDWRcm5wE2zqNKkdVAVE50zNCm9s/adQVkEsWMKYWV8qKTD7plxC0TM3U923Aoku8kQrqcPlGpvjuZ2Un7970tqzkP4EgxNymzlVwQgVaEYFPbrzIyC7jqzOi50IkGo3LmTg6hq9FTU4K9fVRMKWps5Mmc2swwLSWSaBSFxmF06syRFrI5U9bgt+dC0xkRauyR5jqBxJjJNGtKlRll0W4fxSAfiO4t27xrTohWNp1Tw+8Cff1Ts0sCMcKcnt5O1+8R7VnNUa8QGh2IkWxDlkFEB9H1/P4Ak9SSnnd6rbYAAAAASUVORK5CYII=';
 
+// =============================================================================
+// ARCADE BUTTON MAPPING FOR PLAYER 2
+// =============================================================================
+// Maps arcade button codes to keyboard keys for local testing.
+// The arcade cabinet sends codes like 'P2U', 'P2X', etc. when buttons are pressed.
+//
+// PLAYER 2 CONTROLS:
+//   - P2U/P2D/P2L/P2R (Joystick) → Condor Movement (Arrow Keys for local testing)
+//   - P2X (Button X) → Dash Activation (Spacebar for local testing)
+//
+// Diagonal movements work automatically:
+//   - Joystick sends multiple codes simultaneously (e.g., P2U + P2L = up-left)
+//   - Local testing: press multiple arrows (e.g., ArrowUp + ArrowLeft)
+// =============================================================================
+
+const ARCADE_CONTROLS = {
+  // ===== PLAYER 2 CONTROLS =====
+  // Joystick - Arrow Keys for local testing
+  'P2U': ['ArrowUp'],
+  'P2D': ['ArrowDown'],
+  'P2L': ['ArrowLeft'],
+  'P2R': ['ArrowRight'],
+
+  // Joystick Diagonals (arcade sends these as single codes)
+  'P2UL': [], // Up-Left (no keyboard equivalent - simulated by pressing ArrowUp + ArrowLeft)
+  'P2UR': [], // Up-Right
+  'P2DL': [], // Down-Left
+  'P2DR': [], // Down-Right
+
+  // Action Buttons
+  'P2X': [' ']  // Spacebar (note: space character, not KeyCode)
+};
+
+// Build reverse lookup: keyboard key → arcade button code
+const KEYBOARD_TO_ARCADE = {};
+for (const [arcadeCode, keyboardKeys] of Object.entries(ARCADE_CONTROLS)) {
+  if (keyboardKeys) {
+    // Handle both array and single value
+    const keys = Array.isArray(keyboardKeys) ? keyboardKeys : [keyboardKeys];
+    keys.forEach(key => {
+      KEYBOARD_TO_ARCADE[key] = arcadeCode;
+    });
+  }
+}
+
 const config = {
   type: Phaser.AUTO,
   width: 800,
@@ -243,6 +288,19 @@ let condorHitboxIndicator;
 let nextWavePreview;
 let debugRailsGraphics = null;
 let uiCameraRef = null;
+
+// Arcade button state tracking (for arcade cabinet compatibility)
+let arcadeButtons = {
+  P2U: false,
+  P2D: false,
+  P2L: false,
+  P2R: false,
+  P2UL: false, // Diagonal: Up-Left
+  P2UR: false, // Diagonal: Up-Right
+  P2DL: false, // Diagonal: Down-Left
+  P2DR: false, // Diagonal: Down-Right
+  P2X: false
+};
 
 // Game logic
 let score = 0;
@@ -1294,7 +1352,9 @@ function create() {
 
   cursors = this.input.keyboard.createCursorKeys();
   spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-  const handleSpaceDown = () => {
+
+  // Handle both keyboard (for local testing) and arcade button codes
+  const handleDashButton = () => {
     const now = Date.now();
     if (isDashing) {
       dashExtendPressTime = now;
@@ -1302,7 +1362,61 @@ function create() {
       spaceKeyPressTime = now;
     }
   };
-  this.input.keyboard.on('keydown-SPACE', handleSpaceDown);
+
+  // Listen for spacebar (P2X locally) OR arcade P2X directly
+  this.input.keyboard.on('keydown-SPACE', handleDashButton);
+
+  // For arcade cabinet: listen for arcade button codes directly
+  // Track arcade button states (keydown)
+  this.input.keyboard.on('keydown', (event) => {
+    // Check for arcade codes (from cabinet)
+    if (event.key in arcadeButtons) {
+      arcadeButtons[event.key] = true;
+
+      // Handle diagonals - activate both directional buttons
+      if (event.key === 'P2UL') {
+        arcadeButtons.P2U = true;
+        arcadeButtons.P2L = true;
+      } else if (event.key === 'P2UR') {
+        arcadeButtons.P2U = true;
+        arcadeButtons.P2R = true;
+      } else if (event.key === 'P2DL') {
+        arcadeButtons.P2D = true;
+        arcadeButtons.P2L = true;
+      } else if (event.key === 'P2DR') {
+        arcadeButtons.P2D = true;
+        arcadeButtons.P2R = true;
+      }
+
+      // Handle dash button
+      if (event.key === 'P2X') {
+        handleDashButton();
+      }
+    }
+  });
+
+  // Track arcade button states (keyup)
+  this.input.keyboard.on('keyup', (event) => {
+    // Check for arcade codes (from cabinet)
+    if (event.key in arcadeButtons) {
+      arcadeButtons[event.key] = false;
+
+      // Handle diagonals - deactivate both directional buttons
+      if (event.key === 'P2UL') {
+        arcadeButtons.P2U = false;
+        arcadeButtons.P2L = false;
+      } else if (event.key === 'P2UR') {
+        arcadeButtons.P2U = false;
+        arcadeButtons.P2R = false;
+      } else if (event.key === 'P2DL') {
+        arcadeButtons.P2D = false;
+        arcadeButtons.P2L = false;
+      } else if (event.key === 'P2DR') {
+        arcadeButtons.P2D = false;
+        arcadeButtons.P2R = false;
+      }
+    }
+  });
 
   // Semi-transparent red background for score (covers entire screen)
   scoreBackground = this.add.graphics();
@@ -1487,15 +1601,16 @@ function updateCondor(delta) {
   if (withinBuffer && !isDashing) {
     let dirX = 0;
     let dirY = 0;
-    if (cursors.left.isDown || Phaser.Input.Keyboard.JustDown(cursors.left)) {
+    // Check both keyboard (cursors) and arcade buttons for dash direction
+    if (cursors.left.isDown || Phaser.Input.Keyboard.JustDown(cursors.left) || arcadeButtons.P2L) {
       dirX = -1;
-    } else if (cursors.right.isDown || Phaser.Input.Keyboard.JustDown(cursors.right)) {
+    } else if (cursors.right.isDown || Phaser.Input.Keyboard.JustDown(cursors.right) || arcadeButtons.P2R) {
       dirX = 1;
     }
 
-    if (cursors.up.isDown || Phaser.Input.Keyboard.JustDown(cursors.up)) {
+    if (cursors.up.isDown || Phaser.Input.Keyboard.JustDown(cursors.up) || arcadeButtons.P2U) {
       dirY = -1;
-    } else if (cursors.down.isDown || Phaser.Input.Keyboard.JustDown(cursors.down)) {
+    } else if (cursors.down.isDown || Phaser.Input.Keyboard.JustDown(cursors.down) || arcadeButtons.P2D) {
       dirY = 1;
     }
 
@@ -1518,10 +1633,11 @@ function updateCondor(delta) {
 
   const speed = CONFIG.condor.speed * deltaFrames;
 
-  if (cursors.left.isDown) targetX -= speed;
-  if (cursors.right.isDown) targetX += speed;
-  if (cursors.up.isDown) targetY -= speed;
-  if (cursors.down.isDown) targetY += speed;
+  // Check both keyboard (cursors) and arcade buttons (P2L/P2R/P2U/P2D)
+  if (cursors.left.isDown || arcadeButtons.P2L) targetX -= speed;
+  if (cursors.right.isDown || arcadeButtons.P2R) targetX += speed;
+  if (cursors.up.isDown || arcadeButtons.P2U) targetY -= speed;
+  if (cursors.down.isDown || arcadeButtons.P2D) targetY += speed;
 
   targetX = Phaser.Math.Clamp(targetX, CONFIG.limits.minX, CONFIG.limits.maxX);
   targetY = Phaser.Math.Clamp(targetY, CONFIG.limits.minY, CONFIG.limits.maxY);
@@ -1568,9 +1684,12 @@ function update(time, delta) {
     // Detect any input to start game
     const anyKeyPressed = scene.input.keyboard.checkDown(scene.input.keyboard.addKey(''), 1);
     const arrowPressed = cursors.left.isDown || cursors.right.isDown || cursors.up.isDown || cursors.down.isDown;
+    const arcadePressed = arcadeButtons.P2U || arcadeButtons.P2D || arcadeButtons.P2L || arcadeButtons.P2R ||
+                          arcadeButtons.P2UL || arcadeButtons.P2UR || arcadeButtons.P2DL || arcadeButtons.P2DR ||
+                          arcadeButtons.P2X;
     const mouseClicked = scene.input.activePointer.isDown;
 
-    if (Phaser.Input.Keyboard.JustDown(spaceKey) || arrowPressed || mouseClicked ||
+    if (Phaser.Input.Keyboard.JustDown(spaceKey) || arrowPressed || arcadePressed || mouseClicked ||
         scene.input.keyboard.keys && Object.values(scene.input.keyboard.keys).some(key => Phaser.Input.Keyboard.JustDown(key))) {
       startGame();
     }
@@ -1590,9 +1709,11 @@ function update(time, delta) {
       return;
     }
 
-    // Check for restart input
-    if (Phaser.Input.Keyboard.JustDown(spaceKey)) {
+    // Check for restart input (spacebar or P2X)
+    if (Phaser.Input.Keyboard.JustDown(spaceKey) || arcadeButtons.P2X) {
       restartGame();
+      // Reset arcade button state to prevent double-trigger
+      arcadeButtons.P2X = false;
     }
     // Don't update game logic when game is over
     return;
