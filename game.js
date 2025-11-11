@@ -258,6 +258,8 @@ let masterGain = null;
 let musicBeat = 0;
 let musicBPM = 100; // Dynamic BPM: starts at 100, goes up to 170
 let beatInterval = (60 / musicBPM) * 1000 / 4; // 16th notes in ms
+let isMusicStarted = false; // Prevent multiple calls to startMusic()
+let musicInterval = null;   // Reference to setInterval for cleanup
 
 // Dash / Barrel Roll state
 let isDashing = false;
@@ -745,7 +747,6 @@ function spawnWave(scene, waveNumber, preGeneratedPattern = null) {
     });
   });
 
-  console.log(`Wave ${waveNumber}: spawned ${newObstacles.length} obstacles`);
   return newObstacles;
 }
 
@@ -756,8 +757,8 @@ function updateDebugRailsGraphics() {
   debugRailsGraphics.clear();
 
   RAILS.forEach(rail => {
-    // Draw far quad (spawn) - RED
-    debugRailsGraphics.lineStyle(1, 0xFF0000, 0.5);
+    // Draw far quad (spawn) - WHITE
+    debugRailsGraphics.lineStyle(1, 0xFFFFFF, 0.8);
     debugRailsGraphics.strokeRect(
       rail.far.topLeft.x,
       rail.far.topLeft.y,
@@ -765,8 +766,8 @@ function updateDebugRailsGraphics() {
       rail.far.bottomLeft.y - rail.far.topLeft.y
     );
 
-    // Draw near quad (arrival) - GREEN
-    debugRailsGraphics.lineStyle(1, 0x00FF00, 0.5);
+    // Draw near quad (arrival) - WHITE
+    debugRailsGraphics.lineStyle(1, 0xFFFFFF, 0.9);
     debugRailsGraphics.strokeRect(
       rail.near.topLeft.x,
       rail.near.topLeft.y,
@@ -774,8 +775,8 @@ function updateDebugRailsGraphics() {
       rail.near.bottomLeft.y - rail.near.topLeft.y
     );
 
-    // Connect corners to show rails - YELLOW
-    debugRailsGraphics.lineStyle(1, 0xFFFF00, 0.3);
+    // Connect corners to show rails - WHITE
+    debugRailsGraphics.lineStyle(1, 0xFFFFFF, 0.85);
     debugRailsGraphics.lineBetween(rail.far.topLeft.x, rail.far.topLeft.y, rail.near.topLeft.x, rail.near.topLeft.y);
     debugRailsGraphics.lineBetween(rail.far.topRight.x, rail.far.topRight.y, rail.near.topRight.x, rail.near.topRight.y);
     debugRailsGraphics.lineBetween(rail.far.bottomLeft.x, rail.far.bottomLeft.y, rail.near.bottomLeft.x, rail.near.bottomLeft.y);
@@ -792,8 +793,8 @@ function updateNextWavePreview(previewGraphics, nextPattern) {
     const rail = RAILS.find(r => r.id === data.laneId);
     if (!rail) return;
 
-    previewGraphics.fillStyle(0xFF6666, 0.25);
-    // Light red, 25% opacity
+    previewGraphics.fillStyle(0xFF4444, 0.35);
+    // Light red, 35% opacity (matches obstacle bright red)
     previewGraphics.fillRect(
       rail.far.topLeft.x,
       rail.far.topLeft.y,
@@ -801,8 +802,8 @@ function updateNextWavePreview(previewGraphics, nextPattern) {
       rail.far.bottomLeft.y - rail.far.topLeft.y
     );
 
-    // Optional: Add a slightly darker border
-    previewGraphics.lineStyle(1, 0xFF0000, 0.3);
+    // Add a visible border
+    previewGraphics.lineStyle(1.3, 0xFF4444, 0.9);
     previewGraphics.strokeRect(
       rail.far.topLeft.x,
       rail.far.topLeft.y,
@@ -1018,10 +1019,13 @@ function scheduleBass(startTime) {
 
 // Main music loop
 function startMusic() {
+  if (isMusicStarted) return; // Prevent multiple calls
+  isMusicStarted = true;
+
   const scheduleAhead = 0.5; // Schedule 500ms ahead
   let lastScheduleTime = audioCtx.currentTime;
 
-  setInterval(() => {
+  musicInterval = setInterval(() => {
     const currentTime = audioCtx.currentTime;
 
     while (lastScheduleTime < currentTime + scheduleAhead) {
@@ -1030,6 +1034,15 @@ function startMusic() {
       lastScheduleTime += (16 * beatInterval) / 1000; // 2 bars
     }
   }, 100);
+}
+
+// Stop music (for debugging)
+function stopMusic() {
+  if (musicInterval) {
+    clearInterval(musicInterval);
+    musicInterval = null;
+    isMusicStarted = false;
+  }
 }
 
 // Start game (from start screen)
@@ -1050,15 +1063,16 @@ function startGame() {
   condorCellIndicator.setVisible(true);
   nextWavePreview.setVisible(true);
 
-  // Initialize audio on first start
+  // Audio should already be playing from start screen
+  // Just ensure it's running in case something went wrong
   if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume().then(() => {
-      startMusic();
-      console.log('Jungle beats started! 🎵');
+      if (!isMusicStarted) {
+        startMusic();
+      }
     });
-  } else if (audioCtx && audioCtx.state !== 'running') {
+  } else if (audioCtx && !isMusicStarted) {
     startMusic();
-    console.log('Jungle beats started! 🎵');
   }
 
   // Reset condor
@@ -1164,27 +1178,23 @@ function create() {
   const scene = this;
   sceneRef = this; // Store reference for restart
 
-  // Initialize audio system (music starts when game starts, not immediately)
+  // Initialize audio system
   if (!audioCtx) {
     audioCtx = this.sound.context;
     masterGain = audioCtx.createGain();
     masterGain.gain.setValueAtTime(0.5, audioCtx.currentTime);
     masterGain.connect(audioCtx.destination);
+
+    // Try to start music immediately (may fail due to browser autoplay policy)
+    if (audioCtx.state === 'running') {
+      startMusic();
+    }
   }
 
   // Store initial farGrid centerY as the base for dynamic perspective
   baseFarGridCenterY = PERSPECTIVE_SYSTEM.farGrid.centerY;
 
-  console.log('Generating heightmap...');
   heightmapData = generateHeightmap(CONFIG.heightmap.size);
-  console.log('Heightmap ready!');
-
-  // Debug: verificar algunos valores del heightmap
-  console.log('Sample heights:', {
-    center: getTerrainHeight(256, 256),
-    near: getTerrainHeight(256, 300),
-    far: getTerrainHeight(256, 500)
-  });
 
   terrainGraphics = this.add.graphics();
   terrainGraphics.setDepth(DEPTH_LAYERS.TERRAIN);
@@ -1232,7 +1242,6 @@ function create() {
     obstaclesLoaded++;
     if (obstaclesLoaded === 3) {
       // All obstacles loaded
-      console.log('All obstacle textures loaded');
       // DON'T spawn first wave - it will be spawned when game starts
     }
   };
@@ -1249,7 +1258,7 @@ function create() {
 
   // Preview indicator for next wave cells
   nextWavePreview = this.add.graphics();
-  nextWavePreview.setDepth(DEPTH_LAYERS.DEBUG_RAILS - 10); // Behind debug rails
+  nextWavePreview.setDepth(DEPTH_LAYERS.DEBUG_RAILS + 10); // In front of debug rails
   nextWavePreview.setVisible(false); // Hidden in start screen
 
   // Visual indicator for condor's hitbox (collision area)
@@ -1297,7 +1306,7 @@ function create() {
 
   // Semi-transparent red background for score (covers entire screen)
   scoreBackground = this.add.graphics();
-  scoreBackground.fillStyle(0xFF0000, 0.75);  // Red with 75% transparency
+  scoreBackground.fillStyle(0xCC3333, 0.75);  // Red with 75% transparency (matches obstacle medium red)
   scoreBackground.fillRect(0, 0, 800, 600);  // Cover entire screen
   scoreBackground.setDepth(DEPTH_LAYERS.UI - 1).setVisible(false);  // Behind score text, hidden initially
 
@@ -1540,6 +1549,22 @@ function update(time, delta) {
     CONFIG.camera.worldZ += CONFIG.obstacles.currentVelocity * deltaFrames;
     renderHeightmap(terrainGraphics, CONFIG.camera);
 
+    // Resume audio on first interaction (even before starting game)
+    if (audioCtx && audioCtx.state === 'suspended') {
+      const anyInput = scene.input.activePointer.isDown ||
+                       cursors.left.isDown || cursors.right.isDown ||
+                       cursors.up.isDown || cursors.down.isDown ||
+                       (scene.input.keyboard.keys && Object.values(scene.input.keyboard.keys).some(key => key.isDown));
+
+      if (anyInput) {
+        audioCtx.resume().then(() => {
+          if (!isMusicStarted) {
+            startMusic();
+          }
+        });
+      }
+    }
+
     // Detect any input to start game
     const anyKeyPressed = scene.input.keyboard.checkDown(scene.input.keyboard.addKey(''), 1);
     const arrowPressed = cursors.left.isDown || cursors.right.isDown || cursors.up.isDown || cursors.down.isDown;
@@ -1697,9 +1722,6 @@ function update(time, delta) {
 
     // Calculate interval for next wave based on new velocity
     waveSystem.currentWaveInterval = calculateWaveInterval();
-
-    // Debug log (future: trigger beat/sound here)
-    console.log(`Wave ${waveSystem.currentWave}: v=${CONFIG.obstacles.currentVelocity.toFixed(2)}, interval=${Math.round(waveSystem.currentWaveInterval)}f`);
   }
 
   // Update active obstacles
@@ -1811,28 +1833,11 @@ function update(time, delta) {
       }
     });
 
-    if (condorCells) {
-      const condorPositions = condorCells.map(c => {
-        const col = c.id % 5;
-        const row = Math.floor(c.id / 5);
-        return `${c.id}:(${col},${row})`;
-      });
-
-      console.log(`[Matrix Debug] Wave ${waveInArrival} in arrival zone`);
-      console.log(`  Condor at cells: ${condorPositions.join(', ')}`);
-      console.log(`  Matrix has obstacles at: ${matrixOccupied.length > 0 ? matrixOccupied.join(', ') : 'NONE'}`);
-      console.log(`  Actual obstacles in zone: ${obstaclesInZone.length > 0 ? obstaclesInZone.join(' | ') : 'NONE'}`);
-
-      const hasCollisionPotential = condorCells.some(cell => waveSystem.arrivalMatrix[cell.id] === 1);
-      console.log(`  Indicator should be: ${hasCollisionPotential ? 'RED ⚠️' : 'GREEN ✓'}`);
-    }
   }
 
   // Check for collisions
   const collision = checkCollisions();
   if (collision && !gameOver) {
-    console.log(`GAME OVER! Score: ${Math.floor(score)}`);
-
     // Activate game over state
     gameOver = true;
 
